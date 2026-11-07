@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Git remote: `git@github.com:iskw-Lab/life-story-app-demo.git`. Work on a branch and open a PR; do not push to `main` directly. Merging to `main` deploys `prototype/` to GitHub Pages (`.github/workflows/pages.yml`, https://iskw-lab.github.io/life-story-app-demo/). `doc/` (the source planning documents) is git-ignored and exists only locally.
+Git remote: `git@github.com:iskw-Lab/life-story-app-demo.git`. Work on a branch and open a PR; do not push to `main` directly. Merging to `main` deploys `prototype/` to GitHub Pages (`.github/workflows/pages.yml`, https://www.iskwlab.jp/life-story-app-demo/). `doc/` (the source planning documents) is git-ignored and exists only locally.
 
 The repository holds planning material, a data snapshot, the requirements, and a static prototype:
 
