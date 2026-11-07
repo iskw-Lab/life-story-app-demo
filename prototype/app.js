@@ -66,7 +66,7 @@
     theme: "",
     viewBy: "all",
     domain: null,        // [t0, t1] ms when zoomed
-    relTypes: { same_system: true, transition: true, overlap: true, trigger: true, institutional: true, participant: true },
+    relTypes: { same_system: false, transition: true, overlap: false, trigger: false, institutional: true, participant: true }, // start with few lines; add as needed
   };
 
   // ---------- helpers ----------
@@ -82,6 +82,16 @@
     if (parent) parent.appendChild(e);
     return e;
   };
+
+  // quoted phrases 「…」 carry a speaker (本人／母／父／支援者／その他の家族／不明) from build_seed.py
+  function quoteLabel(q) {
+    if (q.speaker === "本人") return "本人の表現（候補・要確認）";
+    if (q.speaker === "不明") return "引用文：発言者未確認";
+    if (q.speaker === "支援者" && /記録の文言/.test(q.basis)) return "支援者（記録の文言）";
+    return `${q.speaker}の発言`;
+  }
+  const spkClass = (q) => ({ 本人: "spk-self", 母: "spk-mother", 父: "spk-father", 支援者: "spk-staff", 不明: "spk-unknown" }[q.speaker] || "spk-family");
+  const quoteLine = (q, withBasis) => `<li><span class="spk ${spkClass(q)}">${esc(quoteLabel(q))}</span> 「${esc(q.text)}」${withBasis ? ` <span class="note">（判定の手がかり: ${esc(q.basis)}・${esc(q.unit || "")}）</span>` : ""}</li>`;
 
   // evidence refs like "原記録10-08／C1008／U1008_02・03"
   function parseRefs(text) {
@@ -251,7 +261,8 @@
       const cs = candsByUnit[u.id] || [];
       return `<div class="unit ${u.id === hlUnit ? "hl" : ""}" id="u-${u.id}">
         <div><span class="note">${u.id}</span> ${esc(u.text)}</div>
-        <div class="note">タグ候補: ${esc(u.tags || "なし")} ／ ${esc(u.voice)} ／ ${esc(u.obs)}</div>
+        <div class="note">タグ候補: ${esc(u.tags || "なし")} ／ ${esc(u.obs)}</div>
+        ${(u.quotes || []).length ? `<ul class="quote-list">${u.quotes.map((q) => quoteLine(q, true)).join("")}</ul>` : ""}
         ${cs.map((c) => `<div class="cand-line">▸ ${CAND_LABEL[c.type]}（${esc(c.kind)}）<span class="badge cand">${esc(c.status || "要確認")}</span></div>`).join("")}
       </div>`;
     }).join("");
@@ -890,47 +901,102 @@
         <div class="refs" style="margin-top:4px">${refChip({ type: "scene", id: focusScene })}</div></div>`;
   }
 
+  const BASIC_REL = ["transition", "institutional", "participant"];
+  function shortLegendHtml() {
+    const sh = (k) => ({ support: "●", family: "○", medical: "■", consult: "▲" }[k]);
+    return `<div class="legend-short" role="note" aria-label="凡例（短縮版）">
+      ${LAYERS.map((l) => `<span><span class="layer-dot ld-${l.id}" aria-hidden="true"></span>${l.name}</span>`).join("")}
+      <span class="sep" aria-hidden="true">｜</span>
+      ${Object.entries(KIND_LABEL).map(([k, v]) => `<span><span aria-hidden="true">${sh(k)}</span> ${v.replace("の記録", "")}</span>`).join("")}
+      <span class="sep" aria-hidden="true">｜</span>
+      <span>大きい＝人が付けた大切さの印</span><span><span aria-hidden="true">◆</span> 権利制限的対応</span><span>点線＝関係の候補（因果ではない）</span>
+    </div>`;
+  }
+  function selbarHtml() {
+    const s = sceneById[st.selected];
+    if (!s) return `<span class="note">出来事を選ぶと、ここに選んだ内容が出ます（Tab で出来事に移り、Enter で選べます）。</span>`;
+    return `<span class="selbar-label">選択中</span>
+      <b>${s.id} ${fmtDate(s.date)}（${yearOf(s.date) - birthYear}歳ごろ）</b>
+      <span class="selbar-text">${esc(clip(s.text, 46))}</span>
+      <span style="flex:1"></span>
+      <a class="btn small" href="#summary" id="toSummary">選んだ出来事の要約へ ↓</a>
+      <a class="btn small primary" href="#/p/${PID}/v2?focus=${s.id}">詳細版（V2）で開く →</a>`;
+  }
+  function periodEntryHtml() {
+    const firstIn = (start, end) => scenes.find((x) => x.date >= start && x.date < end);
+    const placeBtns = S.places.map((p) => { const f = firstIn(p.start, p.end); return f ? `<a class="btn" href="#/p/${PID}/v2?unit=place&focus=${f.id}">${esc(p.name)} <span class="muted">${p.start.slice(0, 4)}–${p.end.slice(0, 4) === "2026" ? "現在" : p.end.slice(0, 4)}</span></a>` : ""; }).join("");
+    const stageBtns = STAGES.map((g) => { const f = firstIn(`${birthYear + g.from}-01-01`, `${birthYear + g.to + 1}-01-01`); return f ? `<a class="btn" href="#/p/${PID}/v2?unit=stage&focus=${f.id}">${g.name} <span class="muted">${g.from}〜${g.to > 100 ? "" : g.to}歳</span></a>` : ""; }).join("");
+    const years = [...new Set(scenes.map((x) => yearOf(x.date)))].sort((x, y) => x - y);
+    const yearBtns = years.map((y) => { const f = scenes.find((x) => yearOf(x.date) === y); const n = scenes.filter((x) => yearOf(x.date) === y).length; return `<a class="chip" href="#/p/${PID}/v2?focus=${f.id}">${y}年 <span class="muted">${n}件</span></a>`; }).join("");
+    return `<section class="card v1-periods" id="periods" aria-labelledby="perH">
+      <h2 id="perH">年・時期から一覧で見る</h2>
+      <p class="note">選んだ時期の最初の出来事から、詳細版（V2）の一覧が開きます。</p>
+      <div class="per-row"><span class="per-label">住まい</span>${placeBtns}</div>
+      <div class="per-row"><span class="per-label">ライフステージ</span>${stageBtns}</div>
+      <details><summary>年から選ぶ（${years.length}年分）</summary><div class="per-years">${yearBtns}</div></details>
+    </section>`;
+  }
   function renderV1() {
     crumbs.innerHTML = `<a href="#/">ホーム</a> › <a href="#/p/${PID}">P001 ダッシュボード</a> › V1 全体概要版`;
     const themes = [...new Set(S.relations.filter((r) => r.type === "theme").map((r) => r.theme))];
+    const allRel = Object.keys(REL).filter((k) => k !== "theme").every((k) => st.relTypes[k]);
+    const basicRel = Object.keys(REL).filter((k) => k !== "theme").every((k) => st.relTypes[k] === BASIC_REL.includes(k));
     app.innerHTML = `
-      <div class="v1-wrap">
-        ${legendHtml()}
-        <div>
-          <div class="card">
-            <div class="v1-controls">
-              <h1 class="inline-h1">P001 ライフストーリー 全体概要版</h1>
-              ${LAYERS.map((l) => `<label><input type="checkbox" data-layer="${l.id}" ${st.layers[l.id] ? "checked" : ""}><span class="layer-dot ld-${l.id}"></span>${l.name}</label>`).join("")}
-              <label>問いで強調 <select id="qSel"><option value="">なし</option>${M.questions.map((q) => `<option value="${q["問ID"]}" ${st.focusQ === +q["問ID"] ? "selected" : ""}>問い${["", "①", "②", "③"][+q["問ID"]]}（${q["参照場面ID"]}）</option>`).join("")}</select></label>
-              <label>本人らしさ・テーマ <select id="themeSel"><option value="">なし</option>${themes.map((th) => `<option ${st.theme === th ? "selected" : ""}>${th}</option>`).join("")}</select></label>
-              <label>大きさの見方 <select id="viewBy">${[["all", "全員の印"], ["本人", "本人の印だけ"], ["支援者", "支援者の印だけ"], ["家族", "家族の印だけ"], ["ピア", "ピアの印だけ"]].map(([v, n]) => `<option value="${v}" ${st.viewBy === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>
-            </div>
-            <div class="v1-controls">
-              <span class="note">関係:</span>
-              ${Object.entries(REL).filter(([k]) => !["theme", "participant"].includes(k)).map(([k, v]) => `<label><input type="checkbox" data-rel-type="${k}" ${st.relTypes[k] ? "checked" : ""}>${v.name}</label>`).join("")}
-              <span style="flex:1"></span>
-              <form id="periodForm" class="period-form" aria-label="表示する期間">
-                <label>期間 <input type="number" name="from" min="1981" max="2026" value="${st.domain ? new Date(st.domain[0]).getFullYear() : 1981}" aria-label="開始年"></label>
-                <span aria-hidden="true">〜</span>
-                <label><span class="sr-only">終了年</span><input type="number" name="to" min="1981" max="2026" value="${st.domain ? new Date(st.domain[1]).getFullYear() : 2026}" aria-label="終了年"></label>
-                <button class="btn small" type="submit">この期間を表示</button>
-              </form>
-              ${st.domain ? `<button class="btn small" id="resetZoom">全期間に戻す</button>` : `<span class="note">図の上をドラッグしても拡大できます</span>`}
-              <button class="btn small primary" id="toV2" title="選択中の期間・出来事から詳細版を開く">詳細版（V2）へ ↓</button>
-            </div>
-            <div class="viz" id="v1"></div>
-          </div>
-          <div class="card summary" id="summary"></div>
+      <div class="v1-page">
+        <div class="v1-head">
+          <h1>P001 ライフストーリー 全体概要版</h1>
+          <p class="v1-lead">横は年と年齢です。出来事を「病気・生活・社会制度」の3つの帯に置いています。出来事を選ぶと、図のすぐ下に内容が出ます。<a href="#periods" id="toPeriods">年・時期から一覧で見る ↓</a></p>
         </div>
+        <section class="card v1-chart" aria-labelledby="chartH">
+          <h2 id="chartH" class="sr-only">全体概要の図</h2>
+          ${shortLegendHtml()}
+          <div class="viz" id="v1"></div>
+          <div class="v1-selbar" id="selbar" aria-live="polite">${selbarHtml()}</div>
+          <div class="v1-controls">
+            ${LAYERS.map((l) => `<label><input type="checkbox" data-layer="${l.id}" ${st.layers[l.id] ? "checked" : ""}><span class="layer-dot ld-${l.id}" aria-hidden="true"></span>${l.name}</label>`).join("")}
+            <label>問いで強調 <select id="qSel"><option value="">なし</option>${M.questions.map((q) => `<option value="${q["問ID"]}" ${st.focusQ === +q["問ID"] ? "selected" : ""}>問い${["", "①", "②", "③"][+q["問ID"]]}（${q["参照場面ID"]}）</option>`).join("")}</select></label>
+            <label>本人らしさ・テーマ <select id="themeSel"><option value="">なし</option>${themes.map((th) => `<option ${st.theme === th ? "selected" : ""}>${th}</option>`).join("")}</select></label>
+            <label>大きさの見方 <select id="viewBy">${[["all", "全員の印"], ["本人", "本人の印だけ"], ["支援者", "支援者の印だけ"], ["家族", "家族の印だけ"], ["ピア", "ピアの印だけ"]].map(([v, n]) => `<option value="${v}" ${st.viewBy === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+          </div>
+          <div class="v1-controls">
+            <span class="ctl-label">関係線</span>
+            <button class="btn small" id="relBasic" aria-pressed="${basicRel}">基本だけ（移行・制度による対応）</button>
+            <button class="btn small" id="relAll" aria-pressed="${allRel}">すべて表示</button>
+            <details class="rel-more"><summary>関係線を選んで追加</summary>
+              ${Object.entries(REL).filter(([k]) => !["theme", "participant"].includes(k)).map(([k, v]) => `<label><input type="checkbox" data-rel-type="${k}" ${st.relTypes[k] ? "checked" : ""}>${v.name}</label>`).join("")}
+            </details>
+          </div>
+          <div class="v1-controls">
+            <form id="periodForm" class="period-form" aria-label="表示する期間">
+              <label>期間 <input type="number" name="from" min="1981" max="2026" value="${st.domain ? new Date(st.domain[0]).getFullYear() : 1981}" aria-label="開始年"></label>
+              <span aria-hidden="true">〜</span>
+              <label><span class="sr-only">終了年</span><input type="number" name="to" min="1981" max="2026" value="${st.domain ? new Date(st.domain[1]).getFullYear() : 2026}" aria-label="終了年"></label>
+              <button class="btn small" type="submit">この期間を表示</button>
+            </form>
+            ${st.domain ? `<button class="btn small" id="resetZoom">全期間に戻す</button>` : `<span class="note">図の上をドラッグしても拡大できます</span>`}
+          </div>
+        </section>
+        <section class="card summary" id="summary" tabindex="-1" aria-labelledby="sumH"></section>
+        ${periodEntryHtml()}
+        <details class="card v1-legend-more">
+          <summary><b>詳しい読み方</b>（色・形・大きさ・印・関係線の意味）</summary>
+          ${legendHtml().replace('<div class="legend card">', '<div class="legend">')}
+        </details>
       </div>`;
     const draw = () => renderTimeline($("#v1"), {
-      onSelect: (id) => { draw(); renderSummary(id); $(`#v1 [data-node="${id}"]`)?.focus(); announce(`${id} を選びました。下に要約があります`); },
+      onSelect: (id) => { draw(); renderSummary(id); $("#selbar").innerHTML = selbarHtml(); bindSelbar(); $(`#v1 [data-node="${id}"]`)?.focus(); announce(`${id} を選びました。図のすぐ下に内容があります`); },
       onZoom: () => renderV1(),
     });
+    const bindSelbar = () => { const a = $("#toSummary"); if (a) a.onclick = (e) => { e.preventDefault(); const box = $("#summary"); box.scrollIntoView({ block: "start", behavior: scrollBehavior() }); box.focus({ preventScroll: true }); }; };
     draw();
     renderSummary(st.selected);
+    bindSelbar();
+    $("#toPeriods").onclick = (e) => { e.preventDefault(); const p = $("#periods"); p.scrollIntoView({ block: "start", behavior: scrollBehavior() }); p.querySelector("a")?.focus({ preventScroll: true }); };
     app.querySelectorAll("[data-layer]").forEach((c) => (c.onchange = () => { st.layers[c.dataset.layer] = c.checked; draw(); }));
     app.querySelectorAll("[data-rel-type]").forEach((c) => (c.onchange = () => { st.relTypes[c.dataset.relType] = c.checked; draw(); }));
+    const setRel = (all) => { for (const k of Object.keys(REL)) if (k !== "theme") st.relTypes[k] = all || BASIC_REL.includes(k); renderV1(); $(all ? "#relAll" : "#relBasic")?.focus(); announce(all ? "関係線をすべて表示しています" : "基本の関係線だけを表示しています"); };
+    $("#relBasic").onclick = () => setRel(false);
+    $("#relAll").onclick = () => setRel(true);
     $("#qSel").onchange = (e) => { st.focusQ = e.target.value ? +e.target.value : null; draw(); };
     $("#themeSel").onchange = (e) => { st.theme = e.target.value; draw(); };
     $("#viewBy").onchange = (e) => { st.viewBy = e.target.value; draw(); };
@@ -943,7 +1009,6 @@
       st.domain = [t(`${a}-01-01`), t(`${b}-12-31`)];
       renderV1(); $("#periodForm button")?.focus(); announce(`${a}年〜${b}年を表示しています`);
     };
-    $("#toV2").onclick = () => (location.hash = `#/p/${PID}/v2${st.selected && sceneById[st.selected] ? `?focus=${st.selected}` : ""}`);
     if (st.selected) $(`#v1`).querySelector(".sel-ring")?.closest("g")?.scrollIntoView?.({ block: "nearest", inline: "center" });
   }
 
@@ -951,18 +1016,20 @@
     const box = $("#summary");
     if (!box) return;
     const s = sceneById[id];
-    if (!s) { box.innerHTML = `<div class="empty">出来事をクリックすると、ここに要約が出ます。詳細から記述ユニット・原記録までたどれます。</div>`; return; }
+    if (!s) { box.innerHTML = `<h2 id="sumH" class="sum-h">選んだ出来事の要約</h2><div class="empty">図の出来事を選ぶと、ここに要約が出ます。詳細から記述・原記録までたどれます。</div>`; return; }
     const ms = marksFor(id);
     const rels = S.relations.filter((r) => (r.from === id || r.to === id) && relStatus(r) !== "棄却");
+    const qs = quotesOf(s);
     box.innerHTML = `
+      <h2 id="sumH" class="sum-h">選んだ出来事の要約：${s.id} ${fmtDate(s.date)}（${yearOf(s.date) - birthYear}歳ごろ）</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <b>${s.id} ${fmtDate(s.date)}（${yearOf(s.date) - birthYear}歳ごろ）</b>
-        ${s.layers.map((l) => `<span class="chip"><span class="layer-dot ld-${l}"></span>${layerName[l]}${l === s.primary ? "（主）" : ""}</span>`).join("")}
+        ${s.layers.map((l) => `<span class="chip static"><span class="layer-dot ld-${l}" aria-hidden="true"></span>${layerName[l]}${l === s.primary ? "（主）" : ""}</span>`).join("")}
         <span class="badge cand">${esc(s.status)}</span>
         ${s.restraint ? '<span class="badge stop">◆ 権利制限的対応</span>' : ""}
       </div>
       <div class="note">${esc(s.heading)} ／ ${esc(s.recorder)}</div>
-      <p style="margin:6px 0">${esc(s.text)}</p>
+      <p class="sum-text">${esc(s.text)}</p>
+      ${qs.length ? `<ul class="quote-list">${qs.map((q) => quoteLine(q, false)).join("")}</ul>` : ""}
       <div class="note">大切さの印: ${ms.length ? ms.map((m) => esc(m.role)).join("・") : "未評価"} ／ 関係 ${rels.length}件</div>
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn primary" id="openV2">詳細版（V2）で開く →</button>
@@ -997,12 +1064,13 @@
     if (st.theme) return new Set(scenes.filter((s) => s.themes.includes(st.theme)).map((s) => s.id));
     return null;
   }
-  const voiceOf = (s) => (unitsByScene[s.id] || []).filter((u) => u.voice.includes("本人発話候補")).map((u) => u.quote || u.text);
+  const quotesOf = (s) => (unitsByScene[s.id] || []).slice().sort((a, b) => a.order - b.order).flatMap((u) => (u.quotes || []).map((q) => ({ ...q, unit: u.id })));
 
   function v2CardHtml(s, side, hl) {
     const open = st.v2Open.has(s.id);
     const ms = marksFor(s.id);
-    const voices = voiceOf(s);
+    const quotes = quotesOf(s);
+    const selfQ = quotes.filter((q) => q.speaker === "本人"), otherQ = quotes.filter((q) => q.speaker !== "本人");
     const rels = S.relations.filter((r) => (r.from === s.id || r.to === s.id) && relStatus(r) !== "棄却");
     const qs = [1, 2, 3].filter((n) => questionScenes(n).has(s.id));
     const cls = ["v2-card", side, hl && !hl.has(s.id) ? "dim" : "", hl && hl.has(s.id) ? "hl" : "", st.selected === s.id ? "sel" : ""].join(" ");
@@ -1017,6 +1085,7 @@
           <h5>場面の原文</h5><div class="rawtext">${esc(s.text)}</div>
           <h5>記述ユニットと自動抽出候補（${units.length}）</h5>
           ${units.map((u) => `<div class="unit"><span class="note">${u.id}</span> ${esc(u.text)}
+            ${(u.quotes || []).length ? `<ul class="quote-list">${u.quotes.map((q) => quoteLine({ ...q, unit: u.id }, true)).join("")}</ul>` : ""}
             ${(candsByUnit[u.id] || []).map((c) => `<div class="cand-line">▸ ${CAND_LABEL[c.type]}（${esc(c.kind)}）<span class="badge cand">${esc(c.status || "要確認")}</span></div>`).join("")}</div>`).join("")}
           <h5>レイヤ（自動候補・要人手確定）</h5>
           ${s.layers.map((l) => `<div class="note"><span class="layer-dot ld-${l}"></span> <b>${layerName[l]}</b>${l === s.primary ? "（主）" : ""}：${esc(s.layerReasons[l].join("、"))}</div>`).join("")}
@@ -1047,7 +1116,8 @@
       <div class="v2-chips">${s.layers.map((l) => `<span class="chip"><span class="layer-dot ld-${l}"></span>${layerName[l]}${l === s.primary ? "（主）" : ""}</span>`).join("")}
         ${s.themes.map((th) => `<span class="badge">${esc(th)}</span>`).join("")}</div>
       ${open ? "" : `<p class="v2-sum">${esc(clip(s.text, 84))}</p>`}
-      ${voices.length ? `<blockquote class="v2-voice">${voices.slice(0, 2).map((v) => `「${esc(clip(v.replace(/^「|」$/g, ""), 50))}」`).join(" ")}<span class="note">本人の表現（候補・本人発話と人手確認が必要）</span></blockquote>` : ""}
+      ${selfQ.length ? `<blockquote class="v2-voice"><span class="spk spk-self">本人の表現（候補・要確認）</span> ${selfQ.slice(0, 3).map((q) => `「${esc(q.text)}」`).join(" ")}</blockquote>` : ""}
+      ${!open && otherQ.length ? `<ul class="quote-list compact">${otherQ.slice(0, 2).map((q) => quoteLine(q, false)).join("")}${otherQ.length > 2 ? `<li class="note">ほかに引用 ${otherQ.length - 2}件（「詳しく」で表示）</li>` : ""}</ul>` : ""}
       <div class="v2-foot">
         <span class="badge cand">原記録由来・${esc(s.status)}</span>
         <span class="badge ${ms.some((m) => m.role === "本人") ? "ok" : ""}">大切さの印: ${ms.length ? ms.map((m) => esc(m.role)).join("・") : "未評価"}</span>
@@ -1078,6 +1148,8 @@
     crumbs.innerHTML = `<a href="#/">ホーム</a> › <a href="#/p/${PID}">P001 ダッシュボード</a> › <a href="#/p/${PID}/v1">V1 全体概要版</a> › V2 詳細版`;
     const themes = [...new Set(scenes.flatMap((s) => s.themes))];
     const hl = highlightSet();
+    if (params.unit === "place" || params.unit === "stage") st.v2Unit = params.unit;
+    const map = (store.d.v2map ||= { collapsed: false, small: false });
     const blocks = v2Blocks();
     const dom = st.domain;
     let n = 0;
@@ -1094,10 +1166,10 @@
         <div class="v2-ribbon ${side}">
           <span class="v2-years">${b.start.slice(0, 4)}–${b.end.slice(0, 4) === "2026" ? "現在" : b.end.slice(0, 4)}</span>
           <span><b>${esc(b.name)}</b> <span class="muted">${esc(b.sub)}・${items.length}件</span></span>
+          ${themesHere.length ? `<span class="v2-themes">よく出てくる：${themesHere.map(esc).join("・")}</span>` : ""}
         </div>
-        <div class="v2-photo ${side}" title="代表の写真・作品（本人の掲載意思が確認できたもののみ表示）">
+        <div class="v2-photo ${side}" title="代表の写真・作品（本人の掲載意思が確認できたもののみ表示）" aria-hidden="true">
           <span>写真・作品<br>（未登録）</span>
-          ${themesHere.length ? `<small>よく出てくる：${themesHere.map(esc).join("・")}</small>` : ""}
         </div>
         ${collapsed ? `<div class="v2-collapsed note">V1 で選んだ期間の外です。<button class="btn small" data-openblock="${bi}">この時期を開く</button></div>` :
           `<div class="v2-items">${items.map((i) => (n++, i.s ? v2CardHtml(i.s, n % 2 ? "L" : "R", hl) : v2EventHtml(i.e, n % 2 ? "L" : "R"))).join("") || '<div class="empty" style="text-align:center">表示できる出来事がありません</div>'}</div>`}
@@ -1120,24 +1192,30 @@
           </div>
           <div class="v2-timeline">${blocksHtml}</div>
         </div>
-        <aside class="v2-side">
-          <div class="card">
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-              <b>全体の中の現在地</b><span style="flex:1"></span>
-              <button class="btn small primary" id="backV1">↑ 概要へ戻る</button>
+        <aside class="v2-side ${map.small ? "small" : ""}" aria-label="現在地と読み方">
+          <section class="card map-card" aria-labelledby="mapH">
+            <div class="map-head">
+              <h2 id="mapH">全体の中の現在地</h2>
+              <button class="btn small" id="mapSize" aria-pressed="${!!map.small}">小さくする</button>
+              <button class="btn small" id="mapToggle" aria-expanded="${!map.collapsed}" aria-controls="mapBody">${map.collapsed ? "ひらく" : "たたむ"}</button>
             </div>
-            <div class="viz" id="v2mini" title="クリック・ドラッグでその時期へ移動"></div>
-            <div class="note" id="v2where">—</div>
-            <button class="btn small" id="v2back" ${v2Jumps ? "" : "hidden"}>← 直前の場所へ戻る</button>
-          </div>
-          <div class="card legend" style="margin-top:10px">
-            <b>読み方</b>
+            <div id="mapBody" ${map.collapsed ? "hidden" : ""}>
+              <div class="viz" id="v2mini" title="クリック・ドラッグでその時期へ移動"></div>
+              <div class="note" id="v2where" aria-live="off">—</div>
+            </div>
+            <div class="map-actions">
+              <button class="btn small primary" id="backV1">↑ 概要へ戻る</button>
+              <button class="btn small" id="v2back" ${v2Jumps ? "" : "hidden"}>← 直前の場所へ戻る</button>
+            </div>
+          </section>
+          <details class="card legend" style="margin-top:10px">
+            <summary><b>読み方</b></summary>
             <div class="li"><span class="layer-dot ld-illness"></span>病気</div>
             <div class="li"><span class="layer-dot ld-life"></span>生活</div>
             <div class="li"><span class="layer-dot ld-institution"></span>社会制度</div>
             <div class="li">★ 実践で新しく加わったこと</div>
-            <p class="note">「本人の表現」は記録中の引用で、本人の発話かどうかは人手確認が必要です。関係は因果を意味しません。</p>
-          </div>
+            <p class="note">引用文には発言者を付けています（本人／母／父／支援者／その他の家族）。手がかりがないものは「引用文：発言者未確認」です。発言者は自動判定の候補で、人手確認が必要です。関係は因果を意味しません。</p>
+          </details>
         </aside>
       </div>`;
 
@@ -1171,7 +1249,7 @@
       $("#v2where").textContent = `いま見ている時期：${name}（${d0.slice(0, 4)}〜${d1.slice(0, 4)}年・${vis.length}件）`;
     };
     let raf = 0;
-    const onScroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if ($("#v2mini")) updateWhere(); }); };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if ($("#v2mini") && !$("#mapBody")?.hidden) updateWhere(); }); };
     window.removeEventListener("scroll", window.__v2scroll || (() => {}));
     window.__v2scroll = onScroll;
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -1187,6 +1265,20 @@
       location.hash = `#/p/${PID}/v1${id && sceneById[id] ? `?sel=${id}` : ""}`;
     };
     $("#v2back").onclick = () => history.back();
+    $("#mapToggle").onclick = () => {
+      map.collapsed = !map.collapsed; store.save();
+      $("#mapBody").hidden = map.collapsed;
+      $("#mapToggle").setAttribute("aria-expanded", String(!map.collapsed));
+      $("#mapToggle").textContent = map.collapsed ? "ひらく" : "たたむ";
+      if (!map.collapsed) updateWhere();
+      announce(map.collapsed ? "現在地図をたたみました" : "現在地図をひらきました");
+    };
+    $("#mapSize").onclick = () => {
+      map.small = !map.small; store.save();
+      app.querySelector(".v2-side").classList.toggle("small", map.small);
+      $("#mapSize").setAttribute("aria-pressed", String(map.small));
+      announce(map.small ? "現在地図を小さくしました" : "現在地図を元の大きさにしました");
+    };
 
     // card actions (delegated)
     app.querySelector(".v2-timeline").onclick = (e) => {
@@ -1262,7 +1354,7 @@
     }
     if (path !== `#/p/${PID}/v2`) { window.removeEventListener("scroll", window.__v2scroll || (() => {})); v2Jumps = 0; }
     if (path === `#/p/${PID}/v2`) {
-      if (currentView === "v2" && params.focus && !keepDrawer) focusCard(params.focus);
+      if (currentView === "v2" && params.focus && !keepDrawer && (!params.unit || params.unit === st.v2Unit)) focusCard(params.focus);
       else renderV2({ ...params, instant: true });
       currentView = "v2";
     } else if (path === `#/p/${PID}/v1`) {

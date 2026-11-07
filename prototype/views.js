@@ -368,13 +368,13 @@
         </form>`;
     } else if (mt.step === "taste") {
       const sc = T.sceneById[info["場面ID"]];
-      const voices = (T.unitsByScene[sc.id] || []).filter((u) => u.voice.includes("本人発話候補"));
+      const voices = (T.unitsByScene[sc.id] || []).flatMap((u) => (u.quotes || []).filter((q) => q.speaker === "本人"));
       panel = `
         <h2>① 一緒に味わう：${esc(info["場面ID"])}「${esc(info["主題"])}」</h2>
         <p class="note">結論を急がず、困った場面・安心した場面・楽しみの場面を、本人の表現に立ち戻りながら一緒に眺めます。</p>
         <div class="box"><h3 class="box-h">原記録 ${esc(sc.rawId)}（${fmtDate(sc.date)}）</h3><p class="meeting-text">${esc(sc.text)}</p>
           <div class="note">${esc(sc.recorder)}</div>
-          ${voices.length ? `<p><b>本人の表現（候補・要確認）:</b> ${voices.map((u) => `「${esc((u.quote || u.text).replace(/^「|」$/g, ""))}」`).join(" ")}</p>` : ""}
+          ${voices.length ? `<p><b>本人の表現（候補・要確認）:</b> ${voices.map((q) => `「${esc(q.text)}」`).join(" ")}</p>` : ""}
         </div>
         <h3>ライフストーリーで見る</h3>
         <div class="viz mini-viz" id="meetMini" role="img" aria-label="ライフストーリー全体概要の縮小図。詳しくは下のリンクから全体概要版または詳細版を開いてください。"></div>

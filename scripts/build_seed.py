@@ -47,6 +47,48 @@ THEMES = {
 }
 
 
+# ---- speaker of each quoted phrase 「…」 (本人／母／父／支援者／その他の家族／不明) ----
+SUPPORTERS = r"(?:私|職員|支援員|担任|教員|看護師|相談員|医師|保育士|三浦|山口|田辺|吉井|西田|片岡|高橋|新井|河合|小野|森|佐伯|石井|岡田|中村|長谷川|藤井)"
+QUOTE = re.compile(r"「([^」]*)(?:」|$)")
+
+
+def quote_speakers(text, writer, prev_speaker=None):
+    """Return [{text, speaker, basis}] for each 「…」 in a description unit.
+
+    Rules are conservative: a quote is attributed to 本人 only when nothing in the sentence
+    names another speaker and the verb after it is an utterance by the person (言う・叫ぶ・繰り返す).
+    Anything not decided is 不明 (shown as 「引用文：発言者未確認」).
+    """
+    out = []
+    for m in QUOTE.finditer(text):
+        prefix = text[text.rfind("。", 0, m.start()) + 1:m.start()]
+        suffix = text[m.end():m.end() + 12]
+        speaker, basis = "不明", "発言者を特定する語がない"
+        fam = re.search(r"(母|父|姉|祖父|祖母)(?:より|は|が|から|も)[^「」。]{0,10}$", prefix)
+        sup = re.search(SUPPORTERS + r"(?:は|が|より|から|も)[^「」。]{0,10}$", prefix)
+        if re.search(r"本人(?:は|が)", prefix):
+            speaker, basis = "本人", "「本人は／が」"
+        elif fam:
+            w = fam.group(1)
+            speaker, basis = (w if w in ("母", "父") else "その他の家族（" + w + "）"), f"「{fam.group(0)[:3]}…」"
+        elif sup:
+            speaker, basis = "支援者", f"「{sup.group(0)[:4]}…」"
+        elif re.search(r"(母|父)に[^「」。]{0,6}$", prefix) and suffix.startswith("と言われ"):
+            speaker, basis = prefix[re.search(r"(母|父)に", prefix).start()], "「〜に話すと…と言われた」"
+        elif re.match(r"と(?:記録|記載|書|だけ書)", suffix) or re.search(r"(記録には|記録に|(?:日勤|夜勤)の)$", prefix):
+            speaker, basis = "支援者", "記録の文言の引用"
+        elif re.match(r"と(?:伝え|告げ|前に立つ|繰り返したが|促|声をかけ|説明|誘)", suffix):
+            speaker, basis = "支援者", "関わる側の声かけ"
+        elif re.match(r"とも(?:話|言)", suffix) and prev_speaker:
+            speaker, basis = prev_speaker, "直前の発言者の続き"
+        elif re.match(r"と(?:言う|言った|言い|叫|繰り返)", suffix) and not suffix.startswith("と言われ"):
+            speaker, basis = "本人", "発話の動詞（主語なし）"
+        if speaker == "不明" and writer in ("母", "父") and re.search(r"私(?:は|が)", prefix):
+            speaker, basis = writer, "記録者本人（家族メモ）"
+        out.append({"text": m.group(1), "speaker": speaker, "basis": basis})
+    return out
+
+
 def record_kind(header):
     if re.search(r"看護|診療|受診|治療|服薬|専門外来|眼科|歯科", header):
         return "medical"
@@ -172,11 +214,23 @@ def main():
     by_id = {x["id"]: x for x in scenes}
     d = lambda sid: by_id[sid]["date"]
 
-    unit_out = [{
-        "id": s(u["記述ID"]), "sceneId": s(u["場面ID"]), "order": u["順番"], "text": s(u["記述原文"]),
-        "tags": s(u["自動タグ候補"]), "voice": s(u["本人の直接発話"]), "quote": s(u["記録中の引用"]),
-        "obs": s(u["観察/解釈候補"]), "status": s(u["判定状態"]),
-    } for u in units]
+    unit_out = []
+    last_speaker = {}
+    for u in sorted(units, key=lambda x: (s(x["場面ID"]), x["順番"] or 0)):
+        sid = s(u["場面ID"])
+        header = by_id[sid]["recorder"] if sid in by_id else ""
+        writer = "母" if re.search(r"／\s*母・", header) else "父" if re.search(r"／\s*父・", header) else ""
+        qs = quote_speakers(s(u["記述原文"]), writer, last_speaker.get(sid))
+        for q in qs:
+            if q["speaker"] != "不明":
+                last_speaker[sid] = q["speaker"]
+        unit_out.append({
+            "id": s(u["記述ID"]), "sceneId": sid, "order": u["順番"], "text": s(u["記述原文"]),
+            "tags": s(u["自動タグ候補"]), "voice": s(u["本人の直接発話"]), "quote": s(u["記録中の引用"]),
+            "obs": s(u["観察/解釈候補"]), "status": s(u["判定状態"]), "quotes": qs,
+        })
+    for sc_ in scenes:
+        sc_["personVoice"] = any(q["speaker"] == "本人" for u in unit_out if u["sceneId"] == sc_["id"] for q in u["quotes"])
 
     # ---- life places (residence) – candidates derived from move-in records -------
     places = [
