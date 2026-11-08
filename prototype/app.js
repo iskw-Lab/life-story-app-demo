@@ -1055,7 +1055,8 @@
           ["いまの計画", `<span class="clamp1">${esc(tasks()[0]?.text || "")} ほか</span> <span class="muted">（P1 模擬案${c.plans.length ? `＋${c.plans.length}件` : ""}）</span>`],
           ["記録", `試した ${evs.length - stopped}件・中止 ${stopped}件${stopped ? ' <span class="badge stop">中止あり</span>' : ""}`],
         ]) + `<p class="tile-lead"><a class="btn small primary" href="${detailHref("practice", "record")}">日常で試したことを記録する</a></p>`, "", "これまでの記録を見る")}
-        ${tile("t-aware", "⑤ 気づき・未確認", "awareness", `<p class="tile-sub">今確認すること</p><ul class="check-mini">${checks.slice(0, 2).map((x) => `<li><span class="clamp1">${esc(x.text)}</span> <a href="${detailHref("awareness", "list", `list=${x.id}`)}">${x.n}件の一覧<span class="sr-only">（${esc(x.text)}）</span></a></li>`).join("")}</ul>`)}
+        ${tile("t-aware", "⑤ 気づき・未確認", "awareness", `<p class="tile-sub">今確認すること</p><ul class="check-mini">${checks.slice(0, 2).map((x) => `<li><span class="clamp1">${esc(x.text)}</span> <a href="${x.id === "health" ? detailHref("health") : detailHref("awareness", "list", `list=${x.id}`)}">${x.n}件の一覧<span class="sr-only">（${esc(x.text)}）</span></a></li>`).join("")}</ul>
+          <p class="tile-lead"><a href="${detailHref("health")}">身体と医療の経過を開く</a> <span class="note">（確かめるもの ${healthPending().length}件）</span></p>`)}
       </div>
       </div>`;
 
