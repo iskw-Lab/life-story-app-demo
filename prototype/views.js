@@ -324,9 +324,8 @@
     { id: "questions", name: "② 3つの問い" },
     { id: "compare", name: "③ 見方の比較" },
     { id: "summary", name: "④ 整理" },
-    { id: "whatif", name: "⑤ What-if" },
-    { id: "plan", name: "⑥ 試行計画" },
-    { id: "close", name: "⑦ おわりに" },
+    { id: "plan", name: "⑤ 支援を変えた場合を考える" },
+    { id: "close", name: "⑥ おわりに" },
   ];
   const KINDS = ["本人の表現", "観察事実", "解釈", "本人の意思の仮説", "提案", "質問"];
   const CONSENT = ["本人と確認できた", "本人未確認", "今回は尋ねていない", "本人が回答を見送った", "記録を希望しない"];
@@ -346,6 +345,7 @@
   function renderMeeting(params = {}, _keep, focusSel) {
     const app = T.app();
     T.crumbs().innerHTML = `<a href="#/">ホーム</a> › <a href="#/p/${PID}">P001 ダッシュボード</a> › ケース会議`;
+    if (params.step === "whatif") params.step = "plan"; // merged into 支援を変えた場合を考える
     if (params.step && STEPS.some((x) => x.id === params.step)) mt.step = params.step;
     const ps = participants();
     const presenting = document.body.classList.contains("presenting");
@@ -427,17 +427,23 @@
           ${M.summary.map((x) => `<label>${esc(x["項目名"])} <span class="note">（${esc(x["位置づけ"])}）</span><textarea name="${x["項目ID"]}" rows="3">${esc(x["内容"] === "None" ? "" : x["内容"])}</textarea></label>`).join("")}
           <button class="btn primary" type="submit">保存する</button>
         </form>`;
-    } else if (mt.step === "whatif") {
-      panel = `
-        <h2>⑤ What-if（将来の可能性を考える問い）</h2>
-        <p class="note">いずれも仮説・未検証です。</p>
-        <form id="whatifForm" class="evt">
-          ${M.whatif.map((x) => `<label>${esc(x["観点"])} <span class="badge">${esc(x["検証状況"])}</span><textarea name="${x["シナリオID"]}" rows="3">${esc(x["内容"])}</textarea></label>`).join("")}
-          <button class="btn primary" type="submit">保存する</button>
-        </form>`;
     } else if (mt.step === "plan") {
+      const WP = { "W-stay": "今のまま", "W-change": "変えた場合", "W-confirm": "確かめること" };
+      const gist = (t) => T.clip(String(t).replace(/^【[^】]*】/, "").split("。")[0] + "。", 46);
       panel = `
-        <h2>⑥ 試行計画（小さく試してみること）</h2>
+        <h2>⑤ 支援を変えた場合を考える</h2>
+        <p class="note">今のまま続けた場合と、支援を変えた場合を並べて考えます。どれも仮説で、まだ確かめていません。</p>
+        <form id="whatifForm" class="evt">
+          <div class="whatif-row">${M.whatif.map((x) => `<section class="whatif" aria-labelledby="mw-${x["シナリオID"]}">
+            <h3 id="mw-${x["シナリオID"]}">${esc(WP[x["シナリオID"]] || x["観点"])}</h3>
+            <p class="gist">${esc(gist(x["内容"]))}</p>
+            <details><summary>詳しく見る・書き直す<span class="sr-only">（${esc(WP[x["シナリオID"]] || "")}）</span></summary>
+              <textarea name="${x["シナリオID"]}" rows="5" aria-label="${esc(WP[x["シナリオID"]] || x["観点"])}の内容">${esc(x["内容"])}</textarea>
+              <span class="badge">${esc(x["検証状況"])}</span></details>
+          </section>`).join("")}</div>
+          <button class="btn" type="submit">書き直した内容を保存する</button>
+        </form>
+        <h3>変えるなら、小さく試す計画を決める</h3>
         <p class="note">拒否・苦痛があれば直ちに止めます（P-5）。* は必須です。</p>
         <form id="planForm" class="evt" novalidate>
           <div class="two-col">
@@ -466,7 +472,7 @@
         <ul>
           <li>加えた見方：${MT.statements.length}件</li>
           <li>試行計画：${store.d.plans.length}件</li>
-          <li>整理・What-if の編集：${Object.keys(MT.summary).length + Object.keys(MT.whatif).length}項目</li>
+          <li>整理・支援を変えた場合の編集：${Object.keys(MT.summary).length + Object.keys(MT.whatif).length}項目</li>
           <li>休憩・中断の記録：${MT.log.length}件</li>
         </ul>
         <p class="note">本人にわかる形でのまとめの共有（V3・様式E）と、次回の確認日の設定を忘れずに。</p>
@@ -527,7 +533,7 @@
     });
     form("#compareForm", (fd) => { MT.compare = Object.fromEntries(fd); save("見方の比較を保存しました", "#compareForm button"); });
     form("#summaryForm", (fd) => { for (const [k, v] of fd) { MT.summary[k] = v; const it = M.summary.find((x) => x["項目ID"] === k); if (it) it["内容"] = v; } save("整理を保存しました", "#summaryForm button"); });
-    form("#whatifForm", (fd) => { for (const [k, v] of fd) { MT.whatif[k] = v; const it = M.whatif.find((x) => x["シナリオID"] === k); if (it) it["内容"] = v; } save("What-if を保存しました", "#whatifForm button"); });
+    form("#whatifForm", (fd) => { for (const [k, v] of fd) { MT.whatif[k] = v; const it = M.whatif.find((x) => x["シナリオID"] === k); if (it) it["内容"] = v; } save("支援を変えた場合の内容を保存しました", "#whatifForm button"); });
     form("#planForm", (fd, f) => {
       const missing = ["from", "to", "owner", "stop"].filter((k) => !String(fd.get(k) || "").trim());
       const err = $("#planErr");

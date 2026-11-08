@@ -105,7 +105,7 @@
     for (const m of s.matchAll(/原記録\s*(\d{2}-\d{2})/g)) out.push({ type: "raw", id: m[1] });
     return out.filter((r, i, a) => a.findIndex((x) => x.type === r.type && x.id === r.id) === i);
   }
-  const refLabel = (r) => (r.type === "raw" ? `原記録 ${r.id}` : r.id);
+  const refLabel = (r) => refText(r);
   const refChip = (r) => `<span class="chip" role="button" tabindex="0" data-ref-type="${r.type}" data-ref-id="${esc(r.id)}">${esc(refLabel(r))}</span>`;
 
   function questionRefs(qno) {
@@ -591,43 +591,91 @@
   const app = $("#app");
   const crumbs = $("#crumbs");
 
+  // ---------- plain-language state of the cycle ----------
+  const PHASE_PLAIN = { "0回目": "生育史を振り返る段階", "1回目": "会議で一緒に味わう段階", "1.5回目": "日常で試す段階", "2回目": "振り返って支援を見直す段階", "まとめ": "まとめる段階", "追跡": "その後を確かめる段階" };
   function cycleState() {
-    // seed: 1回目 = 模擬会議 M-C1008-01, 0回目 = 模擬（シード取込み）
-    const evs = events();
-    return { done: ["0回目", "1回目"], now: evs.length ? "1.5回目" : "1.5回目" };
+    // seed: 0回目・1回目（模擬会議 M-C1008-01）は済み。今は日常で試す段階
+    return { done: ["0回目", "1回目"], now: "1.5回目" };
   }
   function stepperHtml() {
     const c = cycleState();
-    return `<div class="stepper">${PHASES.map((p) => `<span class="step ${c.done.includes(p) ? "done" : p === c.now ? "now" : ""}"><i></i>${p}</span>`).join("")}</div>`;
+    return `<div class="stepper" aria-label="循環の進み具合">${PHASES.map((p) => `<span class="step ${c.done.includes(p) ? "done" : p === c.now ? "now" : ""}"${p === c.now ? ' aria-current="step"' : ""}><i aria-hidden="true"></i>${p}</span>`).join("")}</div>`;
   }
   const pendingCands = () => S.candidates.filter((c) => /要確認|未検証/.test(c.status || "要確認")).length;
   const pendingAfterglow = () => events().filter((e) => !e.afterPerson && !e.afterSupporter).length;
 
+  // ---------- 次にすること: one set per task (すること／担当／確認日／状態) ----------
+  const TASK_STATUS = ["未着手", "進行中", "済"];
+  function tasks() {
+    const sum = by(M.summary, "項目ID");
+    const items = (sum["F-nextAction"]["内容"].match(/[①②③④⑤]([^①②③④⑤]+?)(?=\s*[①②③④⑤]|。|$)/g) || []).map((x) => x.replace(/^[①②③④⑤]/, "").trim());
+    const mockOwner = ["片岡・西田", "片岡・西田", "片岡・西田（由紀・新井が意見）", "高橋"];
+    const list = items.map((text, i) => ({ id: `na${i + 1}`, text, owner: mockOwner[i] || "", ownerNote: "模擬会議の割当から", href: "" }));
+    list.push({ id: "next-meeting", text: "次の会議（振り返って支援を見直す回）の日を決める", owner: "", href: "" });
+    for (const e of events().filter((x) => !x.afterPerson && !x.afterSupporter)) list.push({ id: `after-${e.id}`, text: `${fmtDate(e.date)} の実践（${e.id}）に、その後の様子と余韻を書き足す`, owner: "", href: detailHref("practice") });
+    for (const pl of store.d.plans || []) list.push({ id: `plan-${pl.id}`, text: `試行計画 ${pl.id} を試す：${pl.change}`, owner: pl.owner || "", date: pl.afterglowDate || "", href: detailHref("practice") });
+    const ov = store.d.tasks || {};
+    return list.map((t) => ({ status: "未着手", date: "", ...t, ...(ov[t.id] || {}) }));
+  }
+  const taskSetup = (t) => `<a class="setlink" href="${detailHref("next", "task-" + t.id)}">設定する<span class="sr-only">（${esc(t.text)}）</span></a>`;
+  function taskRowHtml(t, editable) {
+    const unset = (v) => (v ? esc(v) : `<span class="unset">未設定</span>${editable ? "" : ` ${taskSetup(t)}`}`);
+    return `<div class="task ${t.status === "済" ? "done" : ""}" id="task-${t.id}">
+      <dl class="task-kv">
+        <div><dt>すること</dt><dd>${t.href ? `<a href="${t.href}">${esc(t.text)}</a>` : esc(t.text)}</dd></div>
+        <div><dt>担当</dt><dd>${unset(t.owner)}${t.owner && t.ownerNote ? ` <span class="note">（${esc(t.ownerNote)}）</span>` : ""}</dd></div>
+        <div><dt>確認日</dt><dd>${t.date ? fmtDate(t.date) : unset("")}</dd></div>
+        <div><dt>状態</dt><dd><span class="badge ${t.status === "済" ? "ok" : ""}">${esc(t.status)}</span></dd></div>
+      </dl>
+      ${editable ? `<details class="task-edit"${st.taskEdit === t.id ? " open" : ""}><summary>担当・確認日・状態を${t.owner && t.date ? "変える" : "設定する"}<span class="sr-only">（${esc(t.text)}）</span></summary>
+        <form class="evt task-form" data-task="${t.id}">
+          <label>担当<input name="owner" value="${esc(t.owner)}" placeholder="例: 片岡"></label>
+          <label>確認日<input type="date" name="date" value="${esc(t.date)}"></label>
+          <label>状態<select name="status">${TASK_STATUS.map((x) => `<option ${x === t.status ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+          <button class="btn primary" type="submit">保存する</button>
+        </form></details>` : ""}
+    </div>`;
+  }
+
+  // content-first labels for record links (e.g. 「午前と夕方の支援記録を開く（C1008）」)
+  const recordTypeOf = (s) => (s.recorder.split("／")[1] || s.heading).trim();
+  function refText(r) {
+    if (r.type === "scene" && sceneById[r.id]) return `${recordTypeOf(sceneById[r.id])}を開く（${r.id}）`;
+    if (r.type === "unit" && unitById[r.id]) return `「${clip(unitById[r.id].text, 14)}」を開く（${r.id}）`;
+    if (r.type === "raw" && rawById[r.id]) { const sc = scenes.find((x) => x.rawId === r.id); return `${sc ? recordTypeOf(sc) : "原記録"}の原文を開く（${r.id}）`; }
+    return r.id;
+  }
+
   function renderHome() {
     if (role() === "本人") { location.replace(`#/p/${PID}/v3`); return; }
     crumbs.innerHTML = "ホーム";
+    const c = cycleState();
     const info = M.info;
     app.innerHTML = `
       <h1 class="page-title">ホーム</h1>
-      ${role() === "本人" ? `<p class="card"><a class="btn primary big" href="#/p/${PID}/v3">わたしの あゆみ を ひらく</a> <span class="note">本人の立場では、本人向け絵巻物（V3）を開きます（FR-0.1.5）。</span></p>` : ""}
-      <h2 class="section-title">今後の予定</h2>
-      <div class="card"><div class="note">会議カレンダー（試作）: 次回確認日は模擬会議で「未設定」。2回目は初回から2〜4週後が目安です。</div>
-        <div style="margin-top:6px">${esc(info["会議ID"])} 1回目（模擬） — 焦点 ${esc(info["場面ID"])}「${esc(info["主題"])}」 <span class="badge mock">模擬</span></div></div>
       <h2 class="section-title">担当事例</h2>
       <div class="home-grid">
-        <a class="card case-card" id="caseP001" href="#/p/${PID}">
-          <h3>P001 <span class="badge mock">シード・架空</span></h3>
+        <section class="card case-card" aria-labelledby="caseP001h">
+          <h3 id="caseP001h">P001 <span class="badge mock">シード・架空</span></h3>
+          <p class="case-now"><span class="case-k">現在</span>${esc(PHASE_PLAIN[c.now])}</p>
+          <p class="case-next"><span class="case-k">次にすること</span><a href="${detailHref("practice", "record")}">実践を記録</a></p>
           ${stepperHtml()}
-          <dl class="kv">
-            <dt>現在</dt><dd>1.5回目（日常での試行）</dd>
-            <dt>次の会議</dt><dd>2回目：未設定 <span class="muted">（目安 初回から2〜4週後）</span></dd>
-            <dt>余韻の追記待ち</dt><dd>${pendingAfterglow()} 件</dd>
-            <dt>試行の中止</dt><dd>${events().filter((e) => e.stopped).length} 件</dd>
-            <dt>意思確認の期限</dt><dd class="muted">未登録</dd>
-            <dt>未判定の候補</dt><dd>${pendingCands()} 件</dd>
-          </dl>
-        </a>
+          <a class="btn primary case-open" href="#/p/${PID}" aria-describedby="caseP001d">P001の会議・記録を開く</a>
+          <p class="note" id="caseP001d">問い・振り返り・日常で試したこと・ライフストーリーを、1つの画面で見られます。</p>
+          <details class="case-counts"><summary>件数の詳細</summary>
+            <dl class="kv">
+              <dt>次の会議</dt><dd>未設定 <span class="muted">（目安：前回の会議から2〜4週後）</span></dd>
+              <dt>余韻の書き足し待ち</dt><dd>${pendingAfterglow()} 件</dd>
+              <dt>試行の中止</dt><dd>${events().filter((e) => e.stopped).length} 件</dd>
+              <dt>意思確認の期限</dt><dd>未登録</dd>
+              <dt>判定していない候補</dt><dd>${pendingCands()} 件</dd>
+            </dl>
+          </details>
+        </section>
       </div>
+      <h2 class="section-title">今後の予定</h2>
+      <div class="card"><div>次の会議の日は、まだ決まっていません。<a href="${detailHref("next", "task-next-meeting")}">次にすることで日を決める</a></div>
+        <div class="note" style="margin-top:6px">前回: ${esc(info["会議ID"])}（模擬）・焦点「${esc(info["主題"])}」</div></div>
       <p class="note">並び順は次の予定日順です。本人の状態の良し悪しで並べ替えたり色分けしたりはしません（P-7）。</p>`;
   }
 
@@ -636,176 +684,255 @@
   const DETAILS = [
     { id: "questions", name: "② 3つの問い" },
     { id: "reflection", name: "③ 振り返り" },
-    { id: "practice", name: "④ 実践結果の集約" },
+    { id: "practice", name: "④ 日常で試したことを記録" },
     { id: "awareness", name: "⑤ 気づき・未確認" },
-    { id: "next", name: "⑥ 次にやること" },
+    { id: "next", name: "次にすること" },
   ];
-  const detailHref = (id, anchor = "") => `#/p/${PID}/d/${id}${anchor ? `?at=${anchor}` : ""}`;
+  const detailHref = (id, anchor = "", extra = "") => `#/p/${PID}/d/${id}${anchor || extra ? "?" : ""}${anchor ? `at=${anchor}` : ""}${anchor && extra ? "&" : ""}${extra}`;
+  const WHATIF_PLAIN = { "W-stay": "今のまま", "W-change": "変えた場合", "W-confirm": "確かめること" };
+  const firstSentence = (t, n = 48) => clip(String(t || "").replace(/^【[^】]*】/, "").split("。")[0] + "。", n);
 
   function dashCtx() {
     const sum = by(M.summary, "項目ID");
     const qs = M.questions;
-    const qStatus = (n) => store.d.qStatus[n] || (qs.find((q) => +q["問ID"] === n)["入力種別"] === "模擬編集" ? "編集済" : "未レビュー");
+    const qState = (n) => {
+      const v = store.d.qStatus[n];
+      if (v) return typeof v === "string" ? { v, at: "" } : v;
+      return { v: qs.find((q) => +q["問ID"] === n)["入力種別"] === "模擬編集" ? "編集済" : "未レビュー", at: "", initial: true };
+    };
     const hyps = (sum["F-uncertainty"]["内容"].match(/[①②③④⑤]([^①②③④⑤]+?)(?=\s*[①②③④⑤]|。|$)/g) || []).map((h) => h.trim());
     const evs = events();
     const reactions = Object.values(store.d.personReactions || {});
     const recent = new Set(scenes.filter((x) => yearOf(x.date) >= 2019).map((x) => x.id));
     const vp = S.viewpoints.map((v) => ({ ...v, n: S.evidence.filter((e) => e.viewpoint === v.id && recent.has(e.sceneId)).length }));
-    return { sum, qs, qStatus, hyps, evs, reactions, vp, plans: store.d.plans || [] };
+    return { sum, qs, qState, hyps, evs, reactions, vp, plans: store.d.plans || [] };
   }
   const nextDateText = (sum) => (sum["F-nextDate"]["内容"] && sum["F-nextDate"]["内容"] !== "None" ? sum["F-nextDate"]["内容"] : "未設定");
 
+  // ----- 今確認すること (concrete tasks behind the awareness counts) -----
+  function checkItems(c) {
+    const selfQ = S.units.flatMap((u) => (u.quotes || []).filter((q) => q.speaker === "本人").map((q) => ({ ...q, unit: u.id, sceneId: u.sceneId })));
+    const unknownQ = S.units.flatMap((u) => (u.quotes || []).filter((q) => q.speaker === "不明").map((q) => ({ ...q, unit: u.id, sceneId: u.sceneId })));
+    const low = c.vp.reduce((a, b) => (b.n < a.n ? b : a));
+    return [
+      { id: "self", text: "本人の表現の候補を、本人と支援者で確かめる", n: selfQ.length, items: selfQ.map((q) => ({ sceneId: q.sceneId, label: `「${q.text}」`, sub: q.unit })) },
+      { id: "unknown", text: "発言者が分からない引用の発言者を、記録を書いた人に確かめる", n: unknownQ.length, items: unknownQ.map((q) => ({ sceneId: q.sceneId, label: `「${q.text}」`, sub: q.unit })) },
+      { id: "viewpoint", text: `記述が少ない観点について話し合う：${low.question}`, code: `観点 ${low.id} ${low.name}`, n: low.n, items: [...new Set(S.evidence.filter((e) => e.viewpoint === low.id).map((e) => e.sceneId))].map((sid) => ({ sceneId: sid, label: clip(sceneById[sid].text, 40), sub: "" })) },
+      { id: "cands", text: "自動で抜き出した候補を、確定・修正・棄却に振り分ける", n: pendingCands(), items: [...new Set(S.candidates.map((x) => x.sceneId))].map((sid) => ({ sceneId: sid, label: `${recordTypeOf(sceneById[sid])}（${fmtDate(sceneById[sid].date)}）`, sub: `${S.candidates.filter((x) => x.sceneId === sid).length}件` })) },
+    ];
+  }
+
   // --- full panels (detail pages) ---
+  function qStateNote(n, stt) {
+    if (stt.initial) return `<p class="q-state">状態：<b>${esc(stt.v)}</b>（会議で編集された模擬の問い）</p>`;
+    const undo = `問い${QN[n]}の${stt.v}を取り消す`;
+    const d = stt.at ? new Date(stt.at) : null, two = (x) => String(x).padStart(2, "0");
+    const when = d ? `${d.getFullYear()}.${two(d.getMonth() + 1)}.${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}` : "";
+    return `<p class="q-state" role="status">状態：<b>${esc(stt.v)}</b>${when ? `（${when} に変更）` : ""}。元に戻すには「${undo}」を押してください。</p>
+      <button class="btn small" data-qundo="${n}">${undo}</button>`;
+  }
   function questionsFull(c) {
     return c.qs.map((q) => {
       const n = +q["問ID"];
       const refs = questionRefs(n);
-      const cnt = M.statements.filter((x) => +x["問い番号"] === n).length;
-      return `<div class="qcard ${st.focusQ === n ? "active" : ""}" data-q="${n}" id="q${n}">
-        <div class="qtype"><b>${QN[n]} ${esc(q["種類"])}</b><span class="badge">${c.qStatus(n)}</span><span class="badge mock">提案者: 模擬</span><span class="muted">発言 ${cnt}件</span></div>
-        <p>${esc(q["場面別の問い"])}</p>
-        <div class="note">${esc(q["設計上の目的"])}</div>
-        <div class="refs">根拠: ${refs.map((r) => refChip(r).replace("<span ", `<span data-crumb="問い${n}" `)).join("")}</div>
-        <div style="margin-top:6px"><button class="btn small" data-qset="${n}" data-v="採用">採用</button> <button class="btn small" data-qset="${n}" data-v="却下">却下</button> <button class="btn small" data-qfocus="${n}" aria-pressed="${st.focusQ === n}">ライフストーリーで強調</button></div>
-      </div>`;
-    }).join("") + `<p class="note">問いは正解へ誘導しません。採否と編集の履歴を残します（F-4）。</p>`;
+      const stmts = M.statements.filter((x) => +x["問い番号"] === n);
+      const stt = c.qState(n);
+      return `<section class="qsec ${st.focusQ === n ? "active" : ""}" id="q${n}" aria-labelledby="qh${n}">
+        <p class="q-kind">問い${QN[n]}・${esc(q["種類"])} <span class="badge mock">模擬</span></p>
+        <h2 class="q-title" id="qh${n}">${esc(q["場面別の問い"])}</h2>
+        <div class="q-groups">
+          <section aria-labelledby="qa${n}"><h3 id="qa${n}">この問いのねらい</h3><p>${esc(q["設計上の目的"])}。問いは正解へ誘導しません。</p></section>
+          <section aria-labelledby="qb${n}"><h3 id="qb${n}">もとの記録（根拠）</h3><div class="refs">${refs.map((r) => refChip(r).replace("<span ", `<span data-crumb="問い${n}" `)).join("")}</div></section>
+          <section aria-labelledby="qc${n}"><h3 id="qc${n}">会議で出た見方（${stmts.length}件）</h3>
+            <p><a href="${detailHref("reflection", "statements", `q=${n}`)}">問い${QN[n]}の見方を振り返りで読む</a></p></section>
+          <section aria-labelledby="qd${n}"><h3 id="qd${n}">状態と操作</h3>
+            ${qStateNote(n, stt)}
+            <div class="q-actions">
+              <button class="btn small" data-qset="${n}" data-v="採用" aria-pressed="${stt.v === "採用"}">問い${QN[n]}を採用</button>
+              <button class="btn small" data-qset="${n}" data-v="却下" aria-pressed="${stt.v === "却下"}">問い${QN[n]}を却下</button>
+              <button class="btn small" data-qfocus="${n}" aria-pressed="${st.focusQ === n}">問い${QN[n]}を図で強調</button>
+            </div></section>
+        </div>
+      </section>`;
+    }).join("") + `<p class="note">採否と変更の時刻を残します。採否はいつでも取り消せます（F-4）。</p>`;
   }
-  function reflectionFull(c) {
+  function reflectionFull(c, params = {}) {
     const { sum, hyps, evs } = c;
+    const qf = params.q ? +params.q : st.revQ || 0, who = params.who || st.revWho || "";
+    st.revQ = qf; st.revWho = who;
+    const people = [...new Map(M.statements.map((x) => [x["参加者ID"], x["氏名"]])).entries()];
+    const list = M.statements.filter((x) => (!qf || +x["問い番号"] === qf) && (!who || x["参加者ID"] === who));
+    const focus = sceneById[M.info["場面ID"]];
+    const fact = sum["F-confirmed"]["内容"];
     return `
-      <div class="box"><h3 class="box-h">確認できる事実 <span class="badge">原記録にもとづく</span> <span class="badge mock">模擬整理</span></h3>${esc(sum["F-confirmed"]["内容"])}</div>
-      <h3 class="sub-h">仮説（併存させて保持・多数決で決めない）</h3>
-      ${hyps.map((h, i) => `<div class="hyp"><b>H${i + 1}</b><span style="flex:1">${esc(h.replace(/^[①②③④⑤]/, ""))}</span><span class="badge">保留</span></div>`).join("")}
-      <div class="note" style="margin-top:4px">${esc(sum["F-uncertainty"]["内容"].split("。").slice(1).join("。"))}</div>
+      <p class="lead-link"><a href="#/p/${PID}/v2?focus=${focus.id}">${esc(recordTypeOf(focus).replace(/の支援記録$/, ""))}の記録を開く（${focus.id}）</a> <span class="note">会議の焦点：${esc(M.info["主題"])}</span></p>
+      <section class="box" aria-labelledby="rf1"><h2 class="box-h" id="rf1">確認できる事実 <span class="badge">原記録にもとづく</span> <span class="badge mock">模擬整理</span></h2>
+        <p class="gist">${esc(firstSentence(fact, 80))}</p>
+        <details><summary>全文を読む</summary><p>${esc(fact)}</p></details></section>
+      <section aria-labelledby="rf2"><h2 class="sub-h" id="rf2">仮説（併存させて保持・多数決で決めない）</h2>
+        ${hyps.map((h, i) => `<div class="hyp"><b>H${i + 1}</b><span style="flex:1">${esc(h.replace(/^[①②③④⑤]/, ""))}</span><span class="badge">保留</span></div>`).join("")}
+        <details><summary>補足を読む</summary><p>${esc(sum["F-uncertainty"]["内容"].split("。").slice(1).join("。"))}</p></details></section>
       <div class="two-col" style="margin-top:10px" id="afterglow">
-        <div class="box"><h3 class="box-h">余韻（本人のその後の表現）</h3>${evs.filter((e) => e.afterPerson).map((e) => `<div>${fmtDate(e.date)} ${esc(e.afterPerson)}</div>`).join("") || '<div class="empty">まだ記録がありません</div>'}</div>
-        <div class="box"><h3 class="box-h">余韻（支援者自身）</h3>${evs.filter((e) => e.afterSupporter).map((e) => `<div>${fmtDate(e.date)} ${esc(e.afterSupporter)}</div>`).join("") || '<div class="empty">まだ記録がありません</div>'}</div>
+        <section class="box" aria-labelledby="rf3"><h2 class="box-h" id="rf3">その後の本人の様子（余韻）</h2>${evs.filter((e) => e.afterPerson).map((e) => `<div>${fmtDate(e.date)} ${esc(e.afterPerson)}</div>`).join("") || '<div class="empty">まだ記録がありません</div>'}</section>
+        <section class="box" aria-labelledby="rf4"><h2 class="box-h" id="rf4">支援者自身に残ったこと（余韻）</h2>${evs.filter((e) => e.afterSupporter).map((e) => `<div>${fmtDate(e.date)} ${esc(e.afterSupporter)}</div>`).join("") || '<div class="empty">まだ記録がありません</div>'}</section>
       </div>
-      <div class="box" style="margin-top:10px" id="person"><h3 class="box-h">本人の振り返り（様式E・V3 の反応）</h3>${personReactionsHtml()}</div>
-      <h3 class="sub-h" id="statements">会議での発言 ${M.statements.length}件（問い別） <span class="badge mock">模擬</span></h3>
-      ${[1, 2, 3].map((n) => `<div class="note" style="margin-top:8px"><b>問い${QN[n]}</b></div>` + M.statements.filter((x) => +x["問い番号"] === n).map((x) => {
-        const pi = M.participants.findIndex((pp) => pp["参加者ID"] === x["参加者ID"]);
-        return `<div class="stmt"><span class="pdot" style="background:${PART_COLORS[pi] || "var(--muted)"}" aria-hidden="true"></span><div><div class="who">${esc(x["氏名"])}（${esc(participantById[x["参加者ID"]]?.["議論上の視点"] || x["役割"])}）・${esc(x["発言の種類"])}</div>${esc(x["発言内容"])}<div class="refs" style="margin-top:2px">${parseRefs(x["根拠・未確認事項"]).map((r) => refChip(r).replace("<span ", `<span data-crumb="発言${x["発言ID"]}" `)).join("")} <span class="note">${esc(x["根拠・未確認事項"])}</span></div></div></div>`;
-      }).join("")).join("")}`;
+      <section class="box" style="margin-top:10px" id="person" aria-labelledby="rf5"><h2 class="box-h" id="rf5">本人の振り返り（本人と見た画面での反応）</h2>${personReactionsHtml()}</section>
+      <section id="statements" aria-labelledby="rf6">
+        <h2 class="sub-h" id="rf6">会議で出た見方 <span class="badge mock">模擬</span></h2>
+        <form class="filters" id="revFilter" aria-label="見方を絞り込む">
+          <label>問い <select name="q"><option value="0">すべての問い</option>${[1, 2, 3].map((n) => `<option value="${n}" ${qf === n ? "selected" : ""}>問い${QN[n]}</option>`).join("")}</select></label>
+          <label>発言者 <select name="who"><option value="">すべての人</option>${people.map(([id, name]) => `<option value="${id}" ${who === id ? "selected" : ""}>${esc(name)}（${esc(participantById[id]?.["議論上の視点"] || "")}）</option>`).join("")}</select></label>
+          <span class="note" role="status">${list.length}件を表示</span>
+        </form>
+        ${list.map((x) => {
+          const pi = M.participants.findIndex((pp) => pp["参加者ID"] === x["参加者ID"]);
+          return `<article class="stmt"><span class="pdot" style="background:${PART_COLORS[pi] || "var(--muted)"}" aria-hidden="true"></span><div>
+            <div class="who">${esc(x["氏名"])}（${esc(participantById[x["参加者ID"]]?.["議論上の視点"] || x["役割"])}）・${esc(x["発言の種類"])}・問い${QN[+x["問い番号"]]}</div>
+            <p class="gist">${esc(firstSentence(x["発言内容"], 60))}</p>
+            <details><summary>全文と根拠を読む</summary><p>${esc(x["発言内容"])}</p>
+              <div class="refs">${parseRefs(x["根拠・未確認事項"]).map((r) => refChip(r).replace("<span ", `<span data-crumb="発言${x["発言ID"]}" `)).join("")}</div>
+              <p class="note">根拠・未確認事項：${esc(x["根拠・未確認事項"])}</p></details></div></article>`;
+        }).join("") || '<p class="empty">この条件に合う見方はありません。</p>'}
+      </section>`;
+  }
+  function whatifHtml(editable) {
+    return `<div class="whatif-row">${M.whatif.map((w) => `<section class="whatif" aria-labelledby="wf-${w["シナリオID"]}">
+        <h3 id="wf-${w["シナリオID"]}">${esc(WHATIF_PLAIN[w["シナリオID"]] || w["観点"])}</h3>
+        <p class="gist">${esc(firstSentence(w["内容"], 46))}</p>
+        <details><summary>詳しく${editable ? "（書き直す）" : ""}<span class="sr-only">（${esc(WHATIF_PLAIN[w["シナリオID"]] || "")}）</span></summary>
+          ${editable ? `<textarea name="${w["シナリオID"]}" rows="4" aria-label="${esc(WHATIF_PLAIN[w["シナリオID"]] || w["観点"])}の内容">${esc(w["内容"])}</textarea>` : `<p>${esc(w["内容"])}</p>`}
+          <span class="badge">${esc(w["検証状況"])}</span></details>
+      </section>`).join("")}</div>`;
   }
   function practiceFull(c) {
     const { sum, evs } = c;
     return `
-      ${c.plans.map((pl) => `<div class="box" style="margin-bottom:8px"><h3 class="box-h">試行計画 ${esc(pl.id)} <span class="badge ok">会議 ${esc(pl.meeting)} で作成</span></h3>
-        <div><b>何を何から何へ:</b> ${esc(pl.change)}</div><div><b>担当・場面:</b> ${esc(pl.owner)} ／ ${esc(pl.scene)} ／ ${esc(pl.when)}</div>
-        <div><b>止める条件:</b> ${esc(pl.stop)}</div><div class="note">余韻の確認: ${esc(pl.afterglowDate || "未設定")} ／ 本人の意思確認: ${esc(pl.consent)}</div></div>`).join("")}
-      <div class="box"><h3 class="box-h">試行計画 P1 <span class="badge mock">模擬案</span></h3>${esc(sum["F-nextAction"]["内容"])}
-        <div class="note" style="margin-top:4px">本人と確かめる方法: ${esc(sum["F-askPerson"]["内容"])}</div></div>
-      <h3 class="sub-h">計画と実践（実施 ${evs.filter((e) => !e.stopped).length} ／ 中止 ${evs.filter((e) => e.stopped).length}）</h3>
-      ${evs.length ? evs.map((e) => `<div class="evt-item"><b>${esc(e.id)}</b> ${fmtDate(e.date)} ${e.stopped ? '<span class="badge stop">中止</span>' : '<span class="badge">実施</span>'} <span class="badge">試作入力</span>
-          <div>変更: ${esc(e.change)}</div><div>本人が表したこと（原文）: ${esc(e.expression)}</div>
-          ${e.afterPerson || e.afterSupporter ? "" : `<button class="btn small" data-after="${e.id}">余韻を追記</button>`}</div>`).join("") : '<div class="empty">1.5回目の出来事はまだ記録されていません。</div>'}
-      <details style="margin-top:8px" id="record"><summary>1.5回目の出来事を記録する（試作・様式C-1）</summary>
+      <details class="card-like" id="record" open><summary><b>日常で試したことを記録する</b>（1.5回目）</summary>
         <form class="evt" id="evtForm">
-          <label>出来事の日付<input type="date" name="date" value="2026-11-05" required></label>
-          <label>支援・環境を何から何へ変えたか<input name="change" required placeholder="例: 夕方の配膳前に、写真帳と休息を選べる形で提示した"></label>
-          <label>本人が表したこと（原文：言葉・視線・身振り）<textarea name="expression" rows="2" required placeholder="印象語ではなく、示した言葉や動きをそのまま"></textarea></label>
+          <label>試した日<input type="date" name="date" value="2026-11-05" required></label>
+          <label>支援・環境を何から何へ変えたか<input name="change" required placeholder="例: 夕方の配膳前に、写真帳と休息を選べる形で示した"></label>
+          <label>本人が表したこと（言葉・視線・身振りをそのまま）<textarea name="expression" rows="2" required placeholder="印象語ではなく、示した言葉や動きをそのまま"></textarea></label>
           <label><span><input type="checkbox" name="stopped"> 拒否・苦痛があり中止した</span></label>
           <button class="btn primary" type="submit">記録する</button>
         </form>
       </details>
-      <h3 class="sub-h">4観点 出発点 → 現在 <span class="badge">スコアなし</span></h3>
-      <table class="plain"><thead><tr><th scope="col">観点</th><th scope="col">出発点</th><th scope="col">現在</th><th scope="col">根拠・未確認</th></tr></thead><tbody>
-        ${["安心", "表現", "選択", "拡大"].map((a) => `<tr><th scope="row">${a}</th><td class="muted">未記録</td><td class="muted">2回目で記入</td><td class="muted">—</td></tr>`).join("")}
+      <h2 class="sub-h">これまでの記録（試した ${evs.filter((e) => !e.stopped).length}件 ／ 中止 ${evs.filter((e) => e.stopped).length}件）</h2>
+      ${evs.length ? evs.map((e) => `<div class="evt-item"><b>${fmtDate(e.date)}</b>（${esc(e.id)}） ${e.stopped ? '<span class="badge stop">中止</span>' : '<span class="badge">試した</span>'}
+          <div>変えたこと: ${esc(e.change)}</div><div>本人が表したこと: ${esc(e.expression)}</div>
+          ${e.afterPerson || e.afterSupporter ? "" : `<button class="btn small" data-after="${e.id}">${fmtDate(e.date)} の実践に余韻を書き足す</button>`}</div>`).join("") : '<div class="empty">まだ記録がありません。上の欄から記録できます。</div>'}
+      <h2 class="sub-h">いま試している計画</h2>
+      ${c.plans.map((pl) => `<div class="box" style="margin-bottom:8px"><h3 class="box-h">試行計画 ${esc(pl.id)} <span class="badge ok">会議 ${esc(pl.meeting)} で作成</span></h3>
+        <div><b>何を何から何へ:</b> ${esc(pl.change)}</div><div><b>担当・場面:</b> ${esc(pl.owner)} ／ ${esc(pl.scene)} ／ ${esc(pl.when)}</div>
+        <div><b>止める条件:</b> ${esc(pl.stop)}</div><div class="note">余韻の確認: ${esc(pl.afterglowDate || "未設定")} ／ 本人の意思確認: ${esc(pl.consent)}</div></div>`).join("")}
+      <div class="box"><h3 class="box-h">試行計画 P1 <span class="badge mock">模擬案</span></h3><p class="gist">${esc(firstSentence(sum["F-nextAction"]["内容"], 60))}</p>
+        <details><summary>全文を読む</summary><p>${esc(sum["F-nextAction"]["内容"])}</p><p class="note">本人と確かめる方法: ${esc(sum["F-askPerson"]["内容"])}</p></details></div>
+      <h2 class="sub-h">支援を変えた場合を考える</h2>
+      ${whatifHtml(false)}
+      <h2 class="sub-h">4観点 はじめ → いま <span class="badge">スコアなし</span></h2>
+      <table class="plain"><thead><tr><th scope="col">観点</th><th scope="col">はじめ</th><th scope="col">いま</th><th scope="col">根拠・未確認</th></tr></thead><tbody>
+        ${["安心", "表現", "選択", "拡大"].map((a) => `<tr><th scope="row">${a}</th><td class="muted">未記録</td><td class="muted">振り返りの会議で記入</td><td class="muted">—</td></tr>`).join("")}
       </tbody></table>
-      <div class="note" style="margin-top:6px">観察指標（模擬）: ${esc(sum["F-indicator"]["内容"])}</div>
-      <h3 class="sub-h">What-if（3つ目の問いの検討） <span class="badge mock">模擬</span></h3>
-      ${M.whatif.map((w) => `<div class="hyp"><b>${esc(w["観点"])}</b><span style="flex:1">${esc(w["内容"])}</span><span class="badge">${esc(w["検証状況"])}</span></div>`).join("")}`;
+      <details><summary>観察するときの手がかり（模擬）</summary><p>${esc(sum["F-indicator"]["内容"])}</p></details>`;
   }
-  function nextFull(c) {
-    const { sum } = c;
-    return `<table class="plain"><tbody>
-      <tr><th scope="row">担当</th><td>${esc(sum["F-owner"]["内容"])}</td></tr>
-      <tr><th scope="row">次回確認日</th><td>${esc(nextDateText(sum))} <span class="muted">（目安: 初回から2〜4週後）</span></td></tr>
-      <tr><th scope="row">次の実践・記録</th><td>${esc(sum["F-nextAction"]["内容"])}</td></tr>
-      <tr><th scope="row">持ち越し</th><td>${esc(sum["F-carry"]["内容"])}</td></tr>
-      <tr><th scope="row">リマインド</th><td>余韻の追記待ち ${pendingAfterglow()}件 ／ 未判定の候補 ${pendingCands()}件</td></tr>
-    </tbody></table>`;
+  function awarenessFull(c, params = {}) {
+    const items = checkItems(c);
+    const sel = items.find((x) => x.id === params.list);
+    const max = Math.max(...c.vp.map((v) => v.n), 1);
+    return `
+      <section aria-labelledby="aw1"><h2 class="sub-h" id="aw1">今確認すること</h2>
+        <ol class="checks">${items.map((x) => `<li><span class="check-text">${esc(x.text)}${x.code ? ` <span class="note">（${esc(x.code)}）</span>` : ""}</span>
+          <span class="check-n">${x.n}件</span> <a class="btn small" href="${detailHref("awareness", "list", `list=${x.id}`)}">対象の一覧を開く<span class="sr-only">（${esc(x.text)}）</span></a></li>`).join("")}</ol>
+      </section>
+      ${sel ? `<section class="box" id="list" tabindex="-1" aria-labelledby="awl"><h2 class="box-h" id="awl">対象の一覧：${esc(sel.text)}（${sel.items.length}件）</h2>
+        <ul class="target-list">${sel.items.slice(0, 80).map((it) => `<li>${esc(it.label)} <span class="note">${esc(it.sub || "")}</span> <a href="#/p/${PID}/v2?focus=${it.sceneId}">${esc(recordTypeOf(sceneById[it.sceneId]))}を文章で読む（${it.sceneId}）</a></li>`).join("")}</ul>
+        ${sel.items.length > 80 ? `<p class="note">先頭の80件を表示しています。</p>` : ""}</section>` : ""}
+      <section aria-labelledby="aw2"><h2 class="sub-h" id="aw2">見立ての観点ごとの記述（2019年以降の記録）</h2>
+        <div class="bars">${c.vp.map((v) => `<div class="row" data-vp="${v.id}" data-tip="${esc(`<b>${esc(v.name)}（${esc(v.id)}）</b><br>${esc(v.definition)}<br>考える問い: ${esc(v.question)}<br><span class='muted'>限界: ${esc(v.limit)}</span>`)}"><span>${esc(v.name)} <span class="note">（${v.id}）</span></span><span class="track"><span class="fill" style="width:${(v.n / max) * 100}%"></span></span><span class="val">${v.n}</span></div>`).join("")}</div>
+        <p class="note">件数は、技能の高低や因果を示すものではありません。振り返りの手がかりです。</p></section>`;
+  }
+  function nextFull() {
+    const ts = tasks();
+    return `<p class="note">することごとに「担当・確認日・状態」を1組で示します。未設定のものは「設定する」で決められます。</p>
+      <div class="tasks">${ts.map((t) => taskRowHtml(t, true)).join("")}</div>`;
   }
 
   // --- compact tiles (A4 overview) ---
   const kv = (rows) => `<dl class="tile-kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
-  const tile = (cls, title, id, body, extra = "") =>
-    `<section class="panel tile ${cls}" aria-labelledby="t-${id}"><div class="tile-h"><h2 id="t-${id}">${title}</h2>${extra}<a class="more" href="${detailHref(id)}">詳しく<span class="sr-only">（${title}）</span> →</a></div>${body}</section>`;
+  const tile = (cls, title, id, body, extra = "", more = "") =>
+    `<section class="panel tile ${cls}" aria-labelledby="t-${id}"><div class="tile-h"><h2 id="t-${id}">${title}</h2>${extra}<a class="more" href="${detailHref(id)}">${more || `${esc(title.replace(/^[②-⑤] /, ""))}を詳しく見る`} →</a></div>${body}</section>`;
+  // compact form of 次にすること for the A4 overview: one row per task, the same four items
+  const taskTable = (ts) => `<table class="plain task-table"><caption class="sr-only">次にすること（上位${ts.length}件）</caption>
+    <thead><tr><th scope="col">すること</th><th scope="col">担当</th><th scope="col">確認日</th><th scope="col">状態</th></tr></thead>
+    <tbody>${ts.map((t) => `<tr><th scope="row">${t.href ? `<a href="${t.href}">${esc(clip(t.text, 40))}</a>` : esc(clip(t.text, 40))}</th>
+      <td>${t.owner ? esc(t.owner) : `<span class="unset">未設定</span> ${taskSetup(t)}`}</td>
+      <td>${t.date ? fmtDate(t.date) : `<span class="unset">未設定</span> ${taskSetup(t)}`}</td>
+      <td><span class="badge ${t.status === "済" ? "ok" : ""}">${esc(t.status)}</span></td></tr>`).join("")}</tbody></table>`;
 
   function renderDashboard() {
     crumbs.innerHTML = `<a href="#/">ホーム</a> › P001 ケース会議ダッシュボード`;
     const info = M.info;
     const c = dashCtx();
-    const { sum, evs } = c;
-    const low = c.vp.reduce((a, b) => (b.n < a.n ? b : a));
+    const { evs } = c;
     const rCount = c.reactions.reduce((m, r) => ((m[r.value] = (m[r.value] || 0) + 1), m), {});
-    const pImp = Object.values(store.d.marks).filter((ms) => ms.some((m) => m.role === "本人")).length;
     const stopped = evs.filter((e) => e.stopped).length;
+    const open = tasks().filter((t) => t.status !== "済");
+    const checks = checkItems(c);
+    const focus = sceneById[info["場面ID"]];
 
     app.innerHTML = `
       <div class="dash-a4">
       <div class="dash-head compact">
         <h1>P001 ケース会議ダッシュボード</h1>
         ${stepperHtml()}
-        <span class="note">焦点 <span class="chip" role="button" tabindex="0" data-ref-type="scene" data-ref-id="${info["場面ID"]}" data-crumb="ダッシュボード">${info["場面ID"]} ${esc(info["主題"])}</span></span>
+        <span class="note">現在：<b>${esc(PHASE_PLAIN[cycleState().now])}</b></span>
         <span class="badge mock">模擬データを含む</span>
         <span style="flex:1"></span>
-        <a class="btn small no-print" href="#/p/${PID}/v3">本人向け（V3）</a>
+        <a class="btn small no-print" href="#/p/${PID}/v3">本人と見る</a>
         <a class="btn small primary no-print" id="startMeeting" href="#/p/${PID}/meeting">会議を始める</a>
         <button class="btn small no-print" id="printBtn">A4で印刷</button>
       </div>
 
+      <section class="panel next-strip" aria-labelledby="t-next">
+        <div class="tile-h"><h2 id="t-next">次にすること</h2><span class="note">${open.length}件</span><a class="more" href="${detailHref("next")}">次にすることをすべて見る →</a></div>
+        ${taskTable(open.slice(0, 3))}
+      </section>
+
       <section class="panel story-strip" aria-labelledby="t-story">
         <div class="tile-h"><h2 id="t-story">① ライフストーリー</h2>
-          <span class="note">${LAYERS.map((l) => `<span class="layer-dot ld-${l.id}" aria-hidden="true"></span> ${l.name}`).join("　")}　★ 実践 ${evs.length}件${st.focusQ ? `　問い${QN[st.focusQ]}の根拠を強調中` : ""}</span>
+          <span class="note">${LAYERS.map((l) => `<span class="layer-dot ld-${l.id}" aria-hidden="true"></span> ${l.name}`).join("　")}　★ 試したこと ${evs.length}件${st.focusQ ? `　問い${QN[st.focusQ]}の根拠を強調中` : ""}</span>
           <span style="flex:1"></span>
-          <a class="more" href="#/p/${PID}/v1">全体概要（V1）→</a>
-          <a class="more" href="#/p/${PID}/v2${st.focusQ ? `?focus=${M.questions[st.focusQ - 1]["参照場面ID"]}` : ""}">詳細版（V2）→</a></div>
+          <a class="more" href="#/p/${PID}/v1">全体を図で見る →</a>
+          <a class="more" href="#/p/${PID}/v2${st.focusQ ? `?focus=${M.questions[st.focusQ - 1]["参照場面ID"]}` : ""}">出来事を文章で読む →</a></div>
         <div class="viz mini-viz" id="miniViz"></div>
       </section>
 
       <section class="panel q-strip" aria-labelledby="t-questions">
-        <div class="tile-h"><h2 id="t-questions">② 3つの問い</h2><span class="badge mock">模擬</span><a class="more" href="${detailHref("questions")}">詳しく<span class="sr-only">（3つの問い）</span> →</a></div>
+        <div class="tile-h"><h2 id="t-questions">② 3つの問い</h2><span class="badge mock">模擬</span><a class="more" href="${detailHref("questions")}">3つの問いを詳しく見る →</a></div>
         <div class="q-row">
           ${c.qs.map((q) => {
             const n = +q["問ID"];
-            const nRefs = questionRefs(n).length;
-            const cnt = M.statements.filter((x) => +x["問い番号"] === n).length;
-            return `<article class="qmini ${st.focusQ === n ? "active" : ""}">
-              <div class="qtype"><b>${QN[n]} ${esc(q["種類"].replace("ための問い", "問い"))}</b><span class="badge">${c.qStatus(n)}</span></div>
-              <p class="clamp3">${esc(q["場面別の問い"])}</p>
-              <div class="qmini-foot"><span class="muted">根拠 ${nRefs}・発言 ${cnt}</span><span style="flex:1"></span>
-                <button class="btn small" data-qfocus="${n}" aria-pressed="${st.focusQ === n}">強調</button>
-                <a class="btn small" href="${detailHref("questions", "q" + n)}">開く<span class="sr-only">（問い${QN[n]}）</span></a></div>
+            return `<article class="qmini ${st.focusQ === n ? "active" : ""}" aria-labelledby="qm${n}">
+              <h3 class="clamp2" id="qm${n}">${esc(q["場面別の問い"])}</h3>
+              <p class="qtype">問い${QN[n]}・${esc(q["種類"].replace("ための問い", "問い"))}・<span class="badge">${esc(c.qState(n).v)}</span></p>
+              <div class="qmini-foot">
+                <button class="btn small" data-qfocus="${n}" aria-pressed="${st.focusQ === n}">問い${QN[n]}を図で強調</button>
+                <a class="btn small" href="${detailHref("questions", "q" + n)}">問い${QN[n]}を開く</a></div>
             </article>`;
           }).join("")}
         </div>
       </section>
 
-      <div class="tile-row">
-        ${tile("t-rev", "③ 振り返り", "reflection", kv([
-          ["仮説", `${c.hyps.length}件 <span class="muted">（保留 ${c.hyps.length}）</span>`],
-          ["余韻", `本人 ${evs.filter((e) => e.afterPerson).length}・支援者 ${evs.filter((e) => e.afterSupporter).length}件`],
-          ["本人の反応", c.reactions.length ? Object.entries(rCount).map(([k, v]) => `${esc(k)} ${v}`).join("・") + (pImp ? `・たいせつ ${pImp}` : "") : '<span class="muted">まだなし</span>'],
+      <div class="tile-row three">
+        ${tile("t-rev", "③ 振り返り", "reflection", `<p class="tile-lead"><a href="#/p/${PID}/v2?focus=${focus.id}">${esc(recordTypeOf(focus).replace(/の支援記録$/, ""))}の記録を開く（${focus.id}）</a></p>` + kv([
+          ["仮説", `${c.hyps.length}つ（すべて保留）`],
+          ["本人の反応", c.reactions.length ? Object.entries(rCount).map(([k, v]) => `${esc(k)} ${v}`).join("・") : '<span class="muted">まだなし</span>'],
           ["会議の見方", `${M.statements.length}件`],
         ]))}
-        ${tile("t-prac", "④ 実践結果の集約", "practice", kv([
-          ["試行計画", `${c.plans.length + 1}件 <span class="muted">（P1 模擬案${c.plans.length ? `＋${c.plans.length}` : ""}）</span>`],
-          ["実践", `実施 ${evs.length - stopped}・中止 ${stopped}${stopped ? ' <span class="badge stop">中止あり</span>' : ""}`],
-          ["余韻待ち", `${pendingAfterglow()}件`],
-          ["4観点", '<span class="muted">未記録（2回目で記入）</span>'],
-        ]), `<a class="more" href="${detailHref("practice", "record")}">＋記録</a>`)}
-        ${tile("t-aware", "⑤ 気づき・未確認", "awareness", kv([
-          ["未判定の候補", `${pendingCands()}件`],
-          ["意思表出候補", `${S.candidates.filter((x) => x.type === "intent").length}件 <span class="muted">意味は未確定</span>`],
-          ["少ない観点", `${esc(low.id)} ${esc(low.name)}（${low.n}件）`],
-        ]) + `<p class="clamp2 note">確かめてみませんか：${esc(low.question)}</p>`)}
-        ${tile("t-next", "⑥ 次にやること", "next", kv([
-          ["次回確認日", esc(nextDateText(sum))],
-          ["担当", `<span class="clamp2">${esc(sum["F-owner"]["内容"].replace(/^模擬担当：/, ""))}</span>`],
-          ["持ち越し", `<span class="clamp2">${esc(sum["F-carry"]["内容"])}</span>`],
-        ]))}
+        ${tile("t-prac", "④ 日常で試したことを記録", "practice", kv([
+          ["いまの計画", `<span class="clamp1">${esc(tasks()[0]?.text || "")} ほか</span> <span class="muted">（P1 模擬案${c.plans.length ? `＋${c.plans.length}件` : ""}）</span>`],
+          ["記録", `試した ${evs.length - stopped}件・中止 ${stopped}件${stopped ? ' <span class="badge stop">中止あり</span>' : ""}`],
+        ]) + `<p class="tile-lead"><a class="btn small primary" href="${detailHref("practice", "record")}">日常で試したことを記録する</a></p>`, "", "これまでの記録を見る")}
+        ${tile("t-aware", "⑤ 気づき・未確認", "awareness", `<p class="tile-sub">今確認すること</p><ul class="check-mini">${checks.slice(0, 2).map((x) => `<li><span class="clamp1">${esc(x.text)}</span> <a href="${detailHref("awareness", "list", `list=${x.id}`)}">${x.n}件の一覧<span class="sr-only">（${esc(x.text)}）</span></a></li>`).join("")}</ul>`)}
       </div>
       </div>`;
 
@@ -819,7 +946,7 @@
     const d = DETAILS.find((x) => x.id === kind) || DETAILS[0];
     crumbs.innerHTML = `<a href="#/">ホーム</a> › <a href="#/p/${PID}">P001 ダッシュボード</a> › ${esc(d.name)}`;
     const c = dashCtx();
-    const body = { questions: questionsFull, reflection: reflectionFull, practice: practiceFull, awareness: () => awarenessHtml(), next: nextFull }[d.id](c);
+    const body = { questions: () => questionsFull(c), reflection: () => reflectionFull(c, params), practice: () => practiceFull(c), awareness: () => awarenessFull(c, params), next: () => nextFull() }[d.id]();
     app.innerHTML = `
       <div class="detail-page">
         <div class="dash-head compact">
@@ -832,19 +959,34 @@
         </nav>
         <section class="panel detail-body">${body}</section>
       </div>`;
-    bindPanelEvents();
-    if (params.at) { const el = document.getElementById(params.at); if (el) { if (el.tagName === "DETAILS") el.open = true; el.scrollIntoView({ block: "start" }); (el.querySelector("summary, button, input") || el).focus?.({ preventScroll: true }); } }
+    bindPanelEvents(kind, params);
+    if (params.at) { const el = document.getElementById(params.at); if (el) { if (el.tagName === "DETAILS") el.open = true; el.querySelector("details")?.setAttribute("open", ""); el.scrollIntoView({ block: "start" }); (el.matches("[tabindex]") ? el : el.querySelector("summary, button, input, a") || el).focus?.({ preventScroll: true }); } }
     document.title = `P001 ${d.name} — TOMONI（試作）`;
   }
 
-  function bindPanelEvents() {
-    app.querySelectorAll("[data-qfocus]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const n = +b.dataset.qfocus; st.focusQ = st.focusQ === n ? null : n; render(true); app.querySelector(`[data-qfocus="${n}"]`)?.focus(); announce(st.focusQ ? `問い${QN[n]}の根拠をライフストーリーで強調しています` : "強調を解除しました"); }));
-    app.querySelectorAll("[data-qset]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); store.d.qStatus[b.dataset.qset] = b.dataset.v; store.save(); render(true); app.querySelector(`[data-qset="${b.dataset.qset}"][data-v="${b.dataset.v}"]`)?.focus(); announce(`問い${QN[b.dataset.qset]}を「${b.dataset.v}」にしました`); }));
+  function bindPanelEvents(kind, params = {}) {
+    const rerender = (focusSel) => { kind ? renderDetail(kind, { ...params, at: "" }) : render(true); if (focusSel) app.querySelector(focusSel)?.focus(); };
+    app.querySelectorAll("[data-qfocus]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const n = +b.dataset.qfocus; st.focusQ = st.focusQ === n ? null : n; rerender(`[data-qfocus="${n}"]`); announce(st.focusQ ? `問い${QN[n]}の根拠を図で強調しています。もう一度押すと解除します` : `問い${QN[n]}の強調を解除しました`); }));
+    app.querySelectorAll("[data-qset]").forEach((b) => (b.onclick = (e) => {
+      e.stopPropagation();
+      const n = b.dataset.qset;
+      store.d.qStatus[n] = { v: b.dataset.v, at: new Date().toISOString() }; store.save();
+      rerender(`[data-qundo="${n}"]`);
+      announce(`問い${QN[n]}を「${b.dataset.v}」にしました。取り消すには「問い${QN[n]}の${b.dataset.v}を取り消す」を押してください`);
+    }));
+    app.querySelectorAll("[data-qundo]").forEach((b) => (b.onclick = () => { const n = b.dataset.qundo; delete store.d.qStatus[n]; store.save(); rerender(`[data-qset="${n}"]`); announce(`問い${QN[n]}を元の状態に戻しました`); }));
     app.querySelectorAll("[data-after]").forEach((b) => (b.onclick = () => afterglowForm(b.dataset.after)));
-    app.querySelectorAll("[data-vp]").forEach((r) => {
-      r.onmousemove = (e) => showTip(r.dataset.tip, e);
-      r.onmouseleave = hideTip;
-    });
+    app.querySelectorAll("[data-vp]").forEach((r) => { r.onmousemove = (e) => showTip(r.dataset.tip, e); r.onmouseleave = hideTip; });
+    const rf = $("#revFilter");
+    if (rf) rf.onchange = (e) => { const fd = new FormData(rf); st.revQ = +fd.get("q"); st.revWho = fd.get("who"); renderDetail("reflection", { at: "" }); app.querySelector(`#revFilter [name="${e.target.name}"]`)?.focus(); announce(`見方を絞り込みました`); };
+    app.querySelectorAll(".task-form").forEach((f) => (f.onsubmit = (e) => {
+      e.preventDefault();
+      const fd = new FormData(f), id = f.dataset.task;
+      (store.d.tasks ||= {})[id] = { owner: fd.get("owner").trim(), date: fd.get("date"), status: fd.get("status") };
+      store.save(); st.taskEdit = null;
+      renderDetail("next", { at: "" }); document.querySelector(`#task-${id} summary`)?.focus();
+      announce("担当・確認日・状態を保存しました");
+    }));
     const f = $("#evtForm");
     if (f) f.onsubmit = (e) => {
       e.preventDefault();
@@ -853,53 +995,36 @@
         id: `E${store.d.events.length + 1}`, date: fd.get("date"), change: fd.get("change"),
         expression: fd.get("expression"), stopped: !!fd.get("stopped"), plan: "P1", at: new Date().toISOString(),
       });
-      store.save(); render(true); announce("1.5回目の出来事を記録しました");
+      store.save(); rerender("#evtForm button"); announce("日常で試したことを記録しました");
     };
   }
 
   function personReactionsHtml() {
     const rs = Object.entries(store.d.personReactions || {});
     if (!rs.length) return '<div class="empty">まだ回答がありません。「いまは みない／こたえない」も回答として尊重します。</div>';
-    return rs.map(([id, r]) => `<div><span class="chip" role="button" tabindex="0" data-ref-type="scene" data-ref-id="${id}">${id}</span> 本人: <b>${esc(r.value)}</b>
+    return rs.map(([id, r]) => `<div><span class="chip" role="button" tabindex="0" data-ref-type="scene" data-ref-id="${id}">${esc(refText({ type: "scene", id }))}</span> 本人: <b>${esc(r.value)}</b>
       <span class="note">${esc(fmtDate(r.at.slice(0, 10)))}・手伝った人 ${esc(r.helper || "なし")}・方法 ${esc(r.method || "—")}</span></div>`).join("") +
       '<p class="note">本人の回答は、試行や研究記録への同意の代わりにはしません（FR-10.5）。</p>';
   }
   function afterglowForm(id) {
     const e = store.d.events.find((x) => x.id === id);
     pushDrawer(`余韻 ${id}`, () => afterglowForm(id), `
-      <h3>余韻の追記（様式C-2）${esc(id)}</h3>
-      <p class="note">本人のその後の表現と、支援者自身の余韻を分けて記録します。支援者の余韻を本人の感覚の証拠として扱いません。</p>
+      <h3>その後の様子と余韻を書き足す（${fmtDate(e.date)}・${esc(id)}）</h3>
+      <p class="note">本人のその後の表現と、支援者自身の余韻を分けて書きます。支援者の余韻を、本人の感覚の証拠として扱いません。</p>
       <form class="evt" id="afterForm">
         <label>その後、本人が表したこと・生活に見られたこと<textarea name="afterPerson" rows="3"></textarea></label>
-        <label>支援者自身に残った余韻（驚き・安心・戸惑い・違和感）<textarea name="afterSupporter" rows="3"></textarea></label>
-        <button class="btn primary">保存</button>
+        <label>支援者自身に残ったこと（驚き・安心・戸惑い・違和感）<textarea name="afterSupporter" rows="3"></textarea></label>
+        <button class="btn primary">保存する</button>
       </form>`);
     $("#afterForm").onsubmit = (ev) => {
       ev.preventDefault();
       const f = new FormData(ev.target);
       e.afterPerson = f.get("afterPerson"); e.afterSupporter = f.get("afterSupporter");
-      store.save(); drawer.hidden = true; drawerStack = []; render();
+      store.save(); closeDrawer(); render(); announce("余韻を書き足しました");
     };
   }
 
-  function awarenessHtml() {
-    const cnt = {};
-    for (const c of S.candidates) cnt[c.type] = (cnt[c.type] || 0) + 1;
-    const focusScene = M.info["場面ID"];
-    const recent = new Set(scenes.filter((s) => yearOf(s.date) >= 2019).map((s) => s.id));
-    const vp = S.viewpoints.map((v) => ({ ...v, n: S.evidence.filter((e) => e.viewpoint === v.id && recent.has(e.sceneId)).length }));
-    const max = Math.max(...vp.map((v) => v.n), 1);
-    const low = vp.reduce((a, b) => (b.n < a.n ? b : a));
-    const unconfirmedIntent = S.candidates.filter((c) => c.type === "intent").length;
-    return `
-      <div class="note">自動抽出の候補（すべて未検証）: ${Object.entries(cnt).map(([k, v]) => `${CAND_LABEL[k]} ${v}`).join("・")}</div>
-      <div class="note">意思表出の候補 ${unconfirmedIntent} 件は、意味・意思が未確定です（本人と確かめる対象）</div>
-      <h4 class="note" style="margin:10px 0 4px">見立て観点の記述（2019年以降の記録）</h4>
-      <div class="bars">${vp.map((v) => `<div class="row" data-vp="${v.id}" data-tip="${esc(`<b>${esc(v.id)} ${esc(v.name)}</b><br>${esc(v.definition)}<br>省察質問: ${esc(v.question)}<br><span class='muted'>限界: ${esc(v.limit)}</span>`)}"><span>${v.id} ${esc(v.name)}</span><span class="track"><span class="fill" style="width:${(v.n / max) * 100}%"></span></span><span class="val">${v.n}</span></div>`).join("")}</div>
-      <p class="note">件数は技能の高低・因果の証明ではありません。省察の手がかりです。</p>
-      <div class="box" style="margin-top:6px"><h4>確かめてみませんか（${low.id} ${esc(low.name)}の記述が少ない）</h4>${esc(low.question)}
-        <div class="refs" style="margin-top:4px">${refChip({ type: "scene", id: focusScene })}</div></div>`;
-  }
+  function awarenessHtml() { return awarenessFull(dashCtx(), {}); }
 
   const BASIC_REL = ["transition", "institutional", "participant"];
   function shortLegendHtml() {
