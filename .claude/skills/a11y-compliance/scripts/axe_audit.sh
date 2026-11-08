@@ -13,11 +13,12 @@ mkdir -p "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 routes=("$@")
-[ ${#routes[@]} -eq 0 ] && routes=('#/' '#/p/P001' '#/p/P001/d/questions' '#/p/P001/d/reflection' '#/p/P001/d/practice' '#/p/P001/d/awareness' '#/p/P001/d/next' '#/p/P001/v1' '#/p/P001/v2' '#/p/P001/v3' '#/p/P001/meeting')
+[ ${#routes[@]} -eq 0 ] && routes=('#/' '#/p/P001' '#/p/P001/d/questions' '#/p/P001/d/reflection' '#/p/P001/d/practice' '#/p/P001/d/awareness' '#/p/P001/d/health' '#/p/P001/d/next' '#/p/P001/v1' '#/p/P001/v2' '#/p/P001/v3' '#/p/P001/meeting')
 
 # Copy index.html with absolute asset paths and the axe runner appended.
 sed -e "s#src=\"data/seed.js\"#src=\"$PROTO/data/seed.js\"#" \
     -e "s#src=\"app.js\"#src=\"$PROTO/app.js\"#" \
+    -e "s#src=\"views.js\"#src=\"$PROTO/views.js\"#" \
     -e "s#href=\"style.css\"#href=\"$PROTO/style.css\"#" \
     "$PROTO/index.html" > "$TMP/page.html"
 cat >> "$TMP/page.html" <<EOF

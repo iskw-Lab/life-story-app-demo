@@ -604,6 +604,33 @@
   const pendingCands = () => S.candidates.filter((c) => /要確認|未検証/.test(c.status || "要確認")).length;
   const pendingAfterglow = () => events().filter((e) => !e.afterPerson && !e.afterSupporter).length;
 
+  // ---------- 身体と医療の経過 (F-15, P-11) ----------
+  // Interpretation may wait; body signs and pain go to a follow-up check now.
+  const RECENT_YEAR = 2019;
+  const bodyByScene = group(S.candidates.filter((c) => c.type === "body"), "sceneId");
+  const HEALTH_STATUS = ["未確認", "確認中", "対応済み", "経過観察"];
+  const healthOf = (id) => (store.d.health || {})[id] || null;
+  const healthPending = () => Object.keys(bodyByScene)
+    .filter((id) => yearOf(sceneById[id].date) >= RECENT_YEAR && !["対応済み", "経過観察"].includes(healthOf(id)?.status))
+    .sort((a, b) => sceneById[b].date.localeCompare(sceneById[a].date));
+
+  // ---------- 管理語・関わりの記述 (FR-5.6, FR-5.7) ----------
+  // A prompt to re-read from the person's side; never a ban or a forced rewrite.
+  const MGMT_RE = /不穏|粗暴|拒否|落ち着|おとなしく|興奮|パニック|問題行動|他害|暴れ|大声|奇声|多動/;
+  const MGMT_SHOW = { "落ち着": "落ち着いた", "おとなしく": "おとなしくなった" };
+  const MGMT_QS = ["このとき本人は何を伝えたかったか", "何に困っていたか", "どんな声かけや条件のもとでだったか"];
+  const mgmtUnits = () => S.units.filter((u) => MGMT_RE.test(u.text));
+  const BEHAV_RE = /叩|蹴|噛ん|噛み|噛も|大声|拒否|投げ|壊|座り込|飛び出|払っ|叫/;
+  const ENGAGE_RE = /声をかけ|声かけ|伝え|示し|一緒に|誘|用意|選べ|選ん|待っ|聞い|尋ね|相談|見せ|渡し|説明|予告|置い|変え|移し/;
+  const noEngageScenes = () => scenes.filter((x) => { const us = unitsByScene[x.id] || []; return us.some((u) => BEHAV_RE.test(u.text)) && !us.some((u) => ENGAGE_RE.test(u.text)); });
+  // FR-8.3: words that describe the supporter's impression or only that behaviour stopped
+  function expressionWarning(text) {
+    if (/落ち着|おとなしく/.test(text)) return "「落ち着いた」は、行動が収まったことを示す言葉です。安心したとは限りません。表情・身体の緊張・示した言葉や動きをそのまま書き、支援者の印象は余韻の欄に書いてください。";
+    if (MGMT_RE.test(text)) return `「${text.match(MGMT_RE)[0]}」は、本人の様子を支援する側から一語で言い表す言葉です。本人が示した言葉や動きをそのまま書いてください。`;
+    if (/楽しそう|嬉しそう|うれしそう|満足|安心して|穏やか|機嫌/.test(text)) return "「楽しそう」などは支援者の印象です。印象は余韻の欄に書き、ここには示した言葉や動きをそのまま書いてください。";
+    return "";
+  }
+
   // ---------- 次にすること: one set per task (すること／担当／確認日／状態) ----------
   const TASK_STATUS = ["未着手", "進行中", "済"];
   function tasks() {
@@ -611,6 +638,8 @@
     const items = (sum["F-nextAction"]["内容"].match(/[①②③④⑤]([^①②③④⑤]+?)(?=\s*[①②③④⑤]|。|$)/g) || []).map((x) => x.replace(/^[①②③④⑤]/, "").trim());
     const mockOwner = ["片岡・西田", "片岡・西田", "片岡・西田（由紀・新井が意見）", "高橋"];
     const list = items.map((text, i) => ({ id: `na${i + 1}`, text, owner: mockOwner[i] || "", ownerNote: "模擬会議の割当から", href: "" }));
+    const hp = healthPending().length;
+    if (hp) list.unshift({ id: "health", text: `身体サインの受診・対応を確かめる（${hp}件）`, owner: "", href: detailHref("health") });
     list.push({ id: "next-meeting", text: "次の会議（振り返って支援を見直す回）の日を決める", owner: "", href: "" });
     for (const e of events().filter((x) => !x.afterPerson && !x.afterSupporter)) list.push({ id: `after-${e.id}`, text: `${fmtDate(e.date)} の実践（${e.id}）に、その後の様子と余韻を書き足す`, owner: "", href: detailHref("practice") });
     for (const pl of store.d.plans || []) list.push({ id: `plan-${pl.id}`, text: `試行計画 ${pl.id} を試す：${pl.change}`, owner: pl.owner || "", date: pl.afterglowDate || "", href: detailHref("practice") });
@@ -686,6 +715,7 @@
     { id: "reflection", name: "③ 振り返り" },
     { id: "practice", name: "④ 日常で試したことを記録" },
     { id: "awareness", name: "⑤ 気づき・未確認" },
+    { id: "health", name: "身体と医療の経過" },
     { id: "next", name: "次にすること" },
   ];
   const detailHref = (id, anchor = "", extra = "") => `#/p/${PID}/d/${id}${anchor || extra ? "?" : ""}${anchor ? `at=${anchor}` : ""}${anchor && extra ? "&" : ""}${extra}`;
@@ -714,9 +744,13 @@
     const selfQ = S.units.flatMap((u) => (u.quotes || []).filter((q) => q.speaker === "本人").map((q) => ({ ...q, unit: u.id, sceneId: u.sceneId })));
     const unknownQ = S.units.flatMap((u) => (u.quotes || []).filter((q) => q.speaker === "不明").map((q) => ({ ...q, unit: u.id, sceneId: u.sceneId })));
     const low = c.vp.reduce((a, b) => (b.n < a.n ? b : a));
+    const hp = healthPending();
     return [
+      ...(hp.length ? [{ id: "health", text: "身体サインの受診・対応を確かめる（気持ちの解釈を待たずに）", n: hp.length, items: hp.map((sid) => ({ sceneId: sid, label: `${fmtDate(sceneById[sid].date)} ${clip(bodyByScene[sid].map((b) => b.text).join(" "), 40)}`, sub: "", href: detailHref("health", `h-${sid}`), linkText: `${recordTypeOf(sceneById[sid])}の受診・対応を記録する（${sid}）` })) }] : []),
       { id: "self", text: "本人の表現の候補を、本人と支援者で確かめる", n: selfQ.length, items: selfQ.map((q) => ({ sceneId: q.sceneId, label: `「${q.text}」`, sub: q.unit })) },
       { id: "unknown", text: "発言者が分からない引用の発言者を、記録を書いた人に確かめる", n: unknownQ.length, items: unknownQ.map((q) => ({ sceneId: q.sceneId, label: `「${q.text}」`, sub: q.unit })) },
+      { id: "words", text: "管理の言葉で書かれた記録を、本人の側から読み直す", n: mgmtUnits().length, items: mgmtUnits().map((u) => { const w = u.text.match(MGMT_RE)[0]; return { sceneId: u.sceneId, label: `「${MGMT_SHOW[w] || w}」：${clip(u.text, 40)}`, sub: u.id }; }) },
+      { id: "noact", text: "行動だけが書かれ、支援者の声かけや環境の工夫が書かれていない場面に書き足す", n: noEngageScenes().length, items: noEngageScenes().map((x) => ({ sceneId: x.id, label: `${fmtDate(x.date)} ${clip(x.text, 40)}`, sub: "" })) },
       { id: "viewpoint", text: `記述が少ない観点について話し合う：${low.question}`, code: `観点 ${low.id} ${low.name}`, n: low.n, items: [...new Set(S.evidence.filter((e) => e.viewpoint === low.id).map((e) => e.sceneId))].map((sid) => ({ sceneId: sid, label: clip(sceneById[sid].text, 40), sub: "" })) },
       { id: "cands", text: "自動で抜き出した候補を、確定・修正・棄却に振り分ける", n: pendingCands(), items: [...new Set(S.candidates.map((x) => x.sceneId))].map((sid) => ({ sceneId: sid, label: `${recordTypeOf(sceneById[sid])}（${fmtDate(sceneById[sid].date)}）`, sub: `${S.candidates.filter((x) => x.sceneId === sid).length}件` })) },
     ];
@@ -754,7 +788,13 @@
             </div></section>
         </div>
       </section>`;
-    }).join("") + `<p class="note">採否と変更の時刻を残します。採否はいつでも取り消せます（F-4）。</p>`;
+    }).join("") + `<p class="note">採否と変更の時刻を残します。採否はいつでも取り消せます（F-4）。</p>
+      <details class="box q-views"><summary>問いを考えるときの視点</summary><ul>
+        <li><b>二つの苦労：</b>本人が強いられている苦労を、取り除けているか。本人の希望の中にある苦労や失敗の機会を、先回りして奪っていないか。</li>
+        <li><b>体験の機会：</b>外出・遊び・人との関わりなど、いろいろな体験の機会が、時期によってどう変わったか（ライフストーリーの社会制度・生活の場と重ねる）。</li>
+        <li><b>暮らしの根っこ：</b>寝る・食べる・お風呂の時刻や順番を、だれの都合で決めているか。</li>
+        <li><b>本人から始める：</b>「どこで過ごすか」の前に、「だれと、どのように過ごしたいか」。</li>
+      </ul></details>`;
   }
   function reflectionFull(c, params = {}) {
     const { sum, hyps, evs } = c;
@@ -769,9 +809,10 @@
       <section class="box" aria-labelledby="rf1"><h2 class="box-h" id="rf1">確認できる事実 <span class="badge">原記録にもとづく</span> <span class="badge mock">模擬整理</span></h2>
         <p class="gist">${esc(firstSentence(fact, 80))}</p>
         <details><summary>全文を読む</summary><p>${esc(fact)}</p></details></section>
-      <section aria-labelledby="rf2"><h2 class="sub-h" id="rf2">仮説（併存させて保持・多数決で決めない）</h2>
+      <section aria-labelledby="rf2"><h2 class="sub-h" id="rf2">現在の仮説（併存させて保持・多数決で決めない）</h2>
         ${hyps.map((h, i) => `<div class="hyp"><b>H${i + 1}</b><span style="flex:1">${esc(h.replace(/^[①②③④⑤]/, ""))}</span><span class="badge">保留</span></div>`).join("")}
-        <details><summary>補足を読む</summary><p>${esc(sum["F-uncertainty"]["内容"].split("。").slice(1).join("。"))}</p></details></section>
+        <details><summary>補足を読む</summary><p>${esc(sum["F-uncertainty"]["内容"].split("。").slice(1).join("。"))}</p></details>
+        <p class="note">仮説に合わなかったこと：${(store.d.misreadings || []).length}件 <a href="${detailHref("practice", "misread")}">読み違いと関わり直しを見る</a></p></section>
       <div class="two-col" style="margin-top:10px" id="afterglow">
         <section class="box" aria-labelledby="rf3"><h2 class="box-h" id="rf3">その後の本人の様子（余韻）</h2>${evs.filter((e) => e.afterPerson).map((e) => `<div>${fmtDate(e.date)} ${esc(e.afterPerson)}</div>`).join("") || '<div class="empty">まだ記録がありません</div>'}</section>
         <section class="box" aria-labelledby="rf4"><h2 class="box-h" id="rf4">支援者自身に残ったこと（余韻）</h2>${evs.filter((e) => e.afterSupporter).map((e) => `<div>${fmtDate(e.date)} ${esc(e.afterSupporter)}</div>`).join("") || '<div class="empty">まだ記録がありません</div>'}</section>
@@ -804,6 +845,26 @@
           <span class="badge">${esc(w["検証状況"])}</span></details>
       </section>`).join("")}</div>`;
   }
+  function misreadHtml(c) {
+    const ms = store.d.misreadings || [];
+    const basisOpts = [...c.hyps.map((h, i) => `仮説 H${i + 1}：${clip(h.replace(/^[①②③④⑤]/, ""), 30)}`), ...c.plans.map((pl) => `試行計画 ${pl.id}：${clip(pl.change, 30)}`), "試行計画 P1（模擬案）", "その他（補足に書く）"];
+    return `<section id="misread" tabindex="-1" aria-labelledby="mrh"><h2 class="sub-h" id="mrh">読み違いと関わり直し（${ms.length}件）</h2>
+      <p class="note">仮説や関わりが、本人の反応に合わなかったことを残します。失敗を責めるためではなく、本人への理解を深める材料です。人事評価には使いません（P-7, P-12）。</p>
+      ${ms.map((m) => `<div class="evt-item"><b>${fmtDate(m.date)}</b>（${esc(m.id)}・気づいた人 ${esc(m.who)}）
+        <div>元の仮説・関わり: ${esc(m.basis)}${m.basisText ? `（${esc(m.basisText)}）` : ""}</div><div>合わなかった本人の反応: ${esc(m.reaction)}</div>
+        ${m.changed ? `<div>変えた条件: ${esc(m.changed)}</div>` : ""}${m.reengage ? `<div>関わり直した内容とその後: ${esc(m.reengage)}</div>` : ""}</div>`).join("") || '<div class="empty">まだ記録がありません。</div>'}
+      <details class="card-like"><summary>読み違いを記録する</summary>
+        <form class="evt" id="misForm">
+          <label>元の仮説・関わり<select name="basis">${basisOpts.map((o) => `<option>${esc(o)}</option>`).join("")}</select></label>
+          <label>補足（任意）<input name="basisText"></label>
+          <label>合わなかった本人の反応（示した言葉や動き）<textarea name="reaction" rows="2" required></textarea></label>
+          <label>気づいた日<input type="date" name="date" required value="2026-11-08"></label>
+          <label>気づいた人<input name="who" required placeholder="例: 西田"></label>
+          <label>変えた条件<input name="changed" placeholder="例: 配膳前の待ち時間を短くした"></label>
+          <label>関わり直した内容とその後<textarea name="reengage" rows="2"></textarea></label>
+          <button class="btn primary" type="submit">記録する</button>
+        </form></details></section>`;
+  }
   function practiceFull(c) {
     const { sum, evs } = c;
     return `
@@ -811,14 +872,17 @@
         <form class="evt" id="evtForm">
           <label>試した日<input type="date" name="date" value="2026-11-05" required></label>
           <label>支援・環境を何から何へ変えたか<input name="change" required placeholder="例: 夕方の配膳前に、写真帳と休息を選べる形で示した"></label>
-          <label>本人が表したこと（言葉・視線・身振りをそのまま）<textarea name="expression" rows="2" required placeholder="印象語ではなく、示した言葉や動きをそのまま"></textarea></label>
+          <label>支援者がかけた言葉（実際の言い方）<input name="words" placeholder="例: 「写真帳と休けい、どっちにする？」"></label>
+          <label>本人が表したこと（言葉・視線・身振りをそのまま）<textarea name="expression" rows="2" required placeholder="印象語ではなく、示した言葉や動きをそのまま" aria-describedby="exprWarn"></textarea></label>
+          <p class="field-warn" id="exprWarn" role="status"></p>
+          <label>本人の拒否・ためらいと、それへの応じ方（あれば）<textarea name="hesitation" rows="2" placeholder="例: 手を引っこめた → 誘うのをやめ、5分後にもう一度たずねた"></textarea></label>
           <label><span><input type="checkbox" name="stopped"> 拒否・苦痛があり中止した</span></label>
           <button class="btn primary" type="submit">記録する</button>
         </form>
       </details>
       <h2 class="sub-h">これまでの記録（試した ${evs.filter((e) => !e.stopped).length}件 ／ 中止 ${evs.filter((e) => e.stopped).length}件）</h2>
       ${evs.length ? evs.map((e) => `<div class="evt-item"><b>${fmtDate(e.date)}</b>（${esc(e.id)}） ${e.stopped ? '<span class="badge stop">中止</span>' : '<span class="badge">試した</span>'}
-          <div>変えたこと: ${esc(e.change)}</div><div>本人が表したこと: ${esc(e.expression)}</div>
+          <div>変えたこと: ${esc(e.change)}</div>${e.words ? `<div>かけた言葉: ${esc(e.words)}</div>` : ""}<div>本人が表したこと: ${esc(e.expression)}</div>${e.hesitation ? `<div>拒否・ためらいと応じ方: ${esc(e.hesitation)}</div>` : ""}
           ${e.afterPerson || e.afterSupporter ? "" : `<button class="btn small" data-after="${e.id}">${fmtDate(e.date)} の実践に余韻を書き足す</button>`}</div>`).join("") : '<div class="empty">まだ記録がありません。上の欄から記録できます。</div>'}
       <h2 class="sub-h">いま試している計画</h2>
       ${c.plans.map((pl) => `<div class="box" style="margin-bottom:8px"><h3 class="box-h">試行計画 ${esc(pl.id)} <span class="badge ok">会議 ${esc(pl.meeting)} で作成</span></h3>
@@ -826,14 +890,21 @@
         <div><b>止める条件:</b> ${esc(pl.stop)}</div><div class="note">余韻の確認: ${esc(pl.afterglowDate || "未設定")} ／ 本人の意思確認: ${esc(pl.consent)}</div></div>`).join("")}
       <div class="box"><h3 class="box-h">試行計画 P1 <span class="badge mock">模擬案</span></h3><p class="gist">${esc(firstSentence(sum["F-nextAction"]["内容"], 60))}</p>
         <details><summary>全文を読む</summary><p>${esc(sum["F-nextAction"]["内容"])}</p><p class="note">本人と確かめる方法: ${esc(sum["F-askPerson"]["内容"])}</p></details></div>
+      ${misreadHtml(c)}
       <h2 class="sub-h">支援を変えた場合を考える</h2>
       ${whatifHtml(false)}
       <h2 class="sub-h">4観点 はじめ → いま <span class="badge">スコアなし</span></h2>
       <table class="plain"><thead><tr><th scope="col">観点</th><th scope="col">はじめ</th><th scope="col">いま</th><th scope="col">根拠・未確認</th></tr></thead><tbody>
         ${["安心", "表現", "選択", "拡大"].map((a) => `<tr><th scope="row">${a}</th><td class="muted">未記録</td><td class="muted">振り返りの会議で記入</td><td class="muted">—</td></tr>`).join("")}
+        <tr><th scope="row">その他の大切な変化</th><td class="muted" colspan="3">例：誘いを断れたか・途中で休めたか・何もしない日にも周りとの関係と居場所が続いたか</td></tr>
       </tbody></table>
       <details><summary>観察するときの手がかり（模擬）</summary><p>${esc(sum["F-indicator"]["内容"])}</p></details>`;
   }
+  const LIST_GUIDE = {
+    health: `<p class="note">原因は断定しません。ただし「原因が分からない」ことは、確かめない理由にしません（P-11）。</p>`,
+    words: `<p>この言葉の奥にあることを、次の問いで読み直してください。言葉を使ってはいけない、という意味ではありません。</p><ul class="guide-qs">${MGMT_QS.map((q) => `<li>${q}</li>`).join("")}</ul><p class="note">言葉の一覧は試作の仮のものです。現場の職員・ピアと作ります（U-20）。</p>`,
+    noact: `<p class="note">自動で拾った候補です。行動の前後で、支援者がかけた言葉・用意した条件・環境を書き足すと、本人の困りごとや願いを読み取りやすくなります（P-12）。</p>`,
+  };
   function awarenessFull(c, params = {}) {
     const items = checkItems(c);
     const sel = items.find((x) => x.id === params.list);
@@ -844,11 +915,63 @@
           <span class="check-n">${x.n}件</span> <a class="btn small" href="${detailHref("awareness", "list", `list=${x.id}`)}">対象の一覧を開く<span class="sr-only">（${esc(x.text)}）</span></a></li>`).join("")}</ol>
       </section>
       ${sel ? `<section class="box" id="list" tabindex="-1" aria-labelledby="awl"><h2 class="box-h" id="awl">対象の一覧：${esc(sel.text)}（${sel.items.length}件）</h2>
-        <ul class="target-list">${sel.items.slice(0, 80).map((it) => `<li>${esc(it.label)} <span class="note">${esc(it.sub || "")}</span> <a href="#/p/${PID}/v2?focus=${it.sceneId}">${esc(recordTypeOf(sceneById[it.sceneId]))}を文章で読む（${it.sceneId}）</a></li>`).join("")}</ul>
+        ${LIST_GUIDE[sel.id] || ""}
+        <ul class="target-list">${sel.items.slice(0, 80).map((it) => `<li>${esc(it.label)} <span class="note">${esc(it.sub || "")}</span> <a href="${it.href || `#/p/${PID}/v2?focus=${it.sceneId}`}">${esc(it.linkText || `${recordTypeOf(sceneById[it.sceneId])}を文章で読む（${it.sceneId}）`)}</a></li>`).join("")}</ul>
         ${sel.items.length > 80 ? `<p class="note">先頭の80件を表示しています。</p>` : ""}</section>` : ""}
       <section aria-labelledby="aw2"><h2 class="sub-h" id="aw2">見立ての観点ごとの記述（2019年以降の記録）</h2>
         <div class="bars">${c.vp.map((v) => `<div class="row" data-vp="${v.id}" data-tip="${esc(`<b>${esc(v.name)}（${esc(v.id)}）</b><br>${esc(v.definition)}<br>考える問い: ${esc(v.question)}<br><span class='muted'>限界: ${esc(v.limit)}</span>`)}"><span>${esc(v.name)} <span class="note">（${v.id}）</span></span><span class="track"><span class="fill" style="width:${(v.n / max) * 100}%"></span></span><span class="val">${v.n}</span></div>`).join("")}</div>
         <p class="note">件数は、技能の高低や因果を示すものではありません。振り返りの手がかりです。</p></section>`;
+  }
+  function healthCard(sid) {
+    const x = sceneById[sid], h = healthOf(sid) || {}, bs = bodyByScene[sid];
+    const v = (k) => esc(h[k] || "");
+    return `<section class="box health-card" aria-labelledby="hh-${sid}">
+      <h3 class="box-h" id="hh-${sid}">${fmtDate(x.date)} ${esc(recordTypeOf(x))}（${sid}） <span class="badge ${h.status === "対応済み" ? "ok" : ""}">${esc(h.status || "未確認")}</span></h3>
+      <p class="note">記録にある身体サイン <span class="badge">自動の候補・要確認</span></p>
+      <ul class="body-signs">${bs.map((b) => `<li>${esc(b.text)} <span class="note">（${esc(b.kind)}）</span></li>`).join("")}</ul>
+      ${h.status ? `<dl class="kv health-kv">
+        <dt>確認した人・日</dt><dd>${v("who")}（${fmtDate(h.date)}）</dd>
+        <dt>診断名</dt><dd>${v("diagnosis") || '<span class="muted">記入なし</span>'}</dd>
+        <dt>症状</dt><dd>${v("symptom") || '<span class="muted">記入なし</span>'}</dd>
+        <dt>暮らしへの影響</dt><dd>${v("impact") || '<span class="muted">記入なし</span>'}</dd>
+        <dt>判断と理由</dt><dd>${v("judge") || '<span class="muted">記入なし</span>'}</dd>
+        <dt>受診・精査・治療</dt><dd>${v("care") || '<span class="muted">記入なし</span>'}</dd>
+        <dt>本人・家族への説明</dt><dd>${v("explain") || '<span class="muted">記入なし</span>'}</dd>
+      </dl>` : ""}
+      <p><a href="#/p/${PID}/v2?focus=${sid}">${esc(recordTypeOf(x))}を文章で読む（${sid}）</a></p>
+      <details id="h-${sid}"><summary>受診・対応の確認を${h.status ? "書き直す" : "記録する"}<span class="sr-only">（${sid}）</span></summary>
+        <form class="evt health-form" data-scene="${sid}">
+          <label>確認した人<input name="who" required value="${v("who")}" placeholder="例: 看護師 山口"></label>
+          <label>確認した日<input type="date" name="date" required value="${v("date")}"></label>
+          <label>診断名（分かれば）<input name="diagnosis" value="${v("diagnosis")}"></label>
+          <label>症状（いま身体に起きていること）<textarea name="symptom" rows="2">${v("symptom")}</textarea></label>
+          <label>症状が暮らしに与えている影響（食事・睡眠・排泄・移動・活動・人との関わり）<textarea name="impact" rows="2">${v("impact")}</textarea></label>
+          <label>判断と理由<textarea name="judge" rows="2">${v("judge")}</textarea></label>
+          <label>受診・精査・治療<input name="care" value="${v("care")}"></label>
+          <label>本人・家族への説明<input name="explain" value="${v("explain")}"></label>
+          <label>状態<select name="status">${HEALTH_STATUS.map((o) => `<option ${o === (h.status || "確認中") ? "selected" : ""}>${o}</option>`).join("")}</select></label>
+          <button class="btn primary" type="submit">保存する</button>
+        </form></details>
+    </section>`;
+  }
+  function healthFull(params = {}) {
+    const pend = healthPending();
+    const all = Object.keys(bodyByScene).sort((a, b) => sceneById[a].date.localeCompare(sceneById[b].date));
+    const sel = params.sel && bodyByScene[params.sel] && !pend.includes(params.sel) ? params.sel : "";
+    const stateText = (id) => healthOf(id)?.status || (yearOf(sceneById[id].date) >= RECENT_YEAR ? "未確認" : `記録なし（${RECENT_YEAR}年より前）`);
+    return `
+      <p class="lead-note"><b>気持ちの解釈は急がずに保留できます。身体の変化と苦痛への対応は先送りしません（P-11）。</b><br>
+        原因は断定しません。ただし「原因が分からない」「障害のため」は、確かめない理由にしません。</p>
+      ${sel ? `<section aria-labelledby="hlsel"><h2 class="sub-h" id="hlsel">選んだ場面</h2>${healthCard(sel)}</section>` : ""}
+      <section aria-labelledby="hl1"><h2 class="sub-h" id="hl1">受診・対応を確かめるもの（${RECENT_YEAR}年以降の記録・${pend.length}件）</h2>
+        ${pend.length ? pend.map(healthCard).join("") : '<p class="empty">いま確かめるものはありません。</p>'}</section>
+      <section aria-labelledby="hl2"><h2 class="sub-h" id="hl2">これまでの身体サインの記録（${all.length}場面）</h2>
+        <div class="table-wrap"><table class="plain"><caption class="sr-only">身体サインのある場面と、受診・対応の確認の状態</caption>
+          <thead><tr><th scope="col">日付</th><th scope="col">記録</th><th scope="col">身体サインの候補</th><th scope="col">確認の状態</th><th scope="col">操作</th></tr></thead>
+          <tbody>${all.slice().reverse().map((id) => `<tr id="hrow-${id}"><td>${fmtDate(sceneById[id].date)}</td><td>${esc(recordTypeOf(sceneById[id]))}</td>
+            <td>${esc([...new Set(bodyByScene[id].map((b) => b.kind))].join("・"))}</td><td>${esc(stateText(id))}</td>
+            <td><a href="${pend.includes(id) ? detailHref("health", `h-${id}`) : detailHref("health", `h-${id}`, `sel=${id}`)}">確認を記録する<span class="sr-only">（${id}）</span></a></td></tr>`).join("")}</tbody></table></div>
+        <p class="note">医療情報をだれが見られるかは未決です（U-21）。この試作では、記録はこのブラウザ内にだけ保存されます。</p></section>`;
   }
   function nextFull() {
     const ts = tasks();
@@ -932,7 +1055,8 @@
           ["いまの計画", `<span class="clamp1">${esc(tasks()[0]?.text || "")} ほか</span> <span class="muted">（P1 模擬案${c.plans.length ? `＋${c.plans.length}件` : ""}）</span>`],
           ["記録", `試した ${evs.length - stopped}件・中止 ${stopped}件${stopped ? ' <span class="badge stop">中止あり</span>' : ""}`],
         ]) + `<p class="tile-lead"><a class="btn small primary" href="${detailHref("practice", "record")}">日常で試したことを記録する</a></p>`, "", "これまでの記録を見る")}
-        ${tile("t-aware", "⑤ 気づき・未確認", "awareness", `<p class="tile-sub">今確認すること</p><ul class="check-mini">${checks.slice(0, 2).map((x) => `<li><span class="clamp1">${esc(x.text)}</span> <a href="${detailHref("awareness", "list", `list=${x.id}`)}">${x.n}件の一覧<span class="sr-only">（${esc(x.text)}）</span></a></li>`).join("")}</ul>`)}
+        ${tile("t-aware", "⑤ 気づき・未確認", "awareness", `<p class="tile-sub">今確認すること</p><ul class="check-mini">${checks.slice(0, 2).map((x) => `<li><span class="clamp1">${esc(x.text)}</span> <a href="${x.id === "health" ? detailHref("health") : detailHref("awareness", "list", `list=${x.id}`)}">${x.n}件の一覧<span class="sr-only">（${esc(x.text)}）</span></a></li>`).join("")}</ul>
+          <p class="tile-lead"><a href="${detailHref("health")}">身体と医療の経過を開く</a> <span class="note">（確かめるもの ${healthPending().length}件）</span></p>`)}
       </div>
       </div>`;
 
@@ -946,7 +1070,7 @@
     const d = DETAILS.find((x) => x.id === kind) || DETAILS[0];
     crumbs.innerHTML = `<a href="#/">ホーム</a> › <a href="#/p/${PID}">P001 ダッシュボード</a> › ${esc(d.name)}`;
     const c = dashCtx();
-    const body = { questions: () => questionsFull(c), reflection: () => reflectionFull(c, params), practice: () => practiceFull(c), awareness: () => awarenessFull(c, params), next: () => nextFull() }[d.id]();
+    const body = { questions: () => questionsFull(c), reflection: () => reflectionFull(c, params), practice: () => practiceFull(c), awareness: () => awarenessFull(c, params), health: () => healthFull(params), next: () => nextFull() }[d.id]();
     app.innerHTML = `
       <div class="detail-page">
         <div class="dash-head compact">
@@ -987,13 +1111,31 @@
       renderDetail("next", { at: "" }); document.querySelector(`#task-${id} summary`)?.focus();
       announce("担当・確認日・状態を保存しました");
     }));
+    app.querySelectorAll(".health-form").forEach((hf) => (hf.onsubmit = (e) => {
+      e.preventDefault();
+      const fd = new FormData(hf), sid = hf.dataset.scene;
+      (store.d.health ||= {})[sid] = Object.fromEntries(["who", "date", "diagnosis", "symptom", "impact", "judge", "care", "explain", "status"].map((k) => [k, String(fd.get(k) || "").trim()]));
+      store.save(); rerender();
+      (app.querySelector(`#h-${sid} summary`) || app.querySelector(`#hrow-${sid} a`))?.focus();
+      announce(`受診・対応の確認を記録しました（${sid}・状態：${fd.get("status")}）`);
+    }));
+    const ex = app.querySelector('#evtForm [name="expression"]');
+    if (ex) ex.oninput = () => { const w = expressionWarning(ex.value); const el = $("#exprWarn"); if (el.textContent !== w) el.textContent = w; };
+    const mf = $("#misForm");
+    if (mf) mf.onsubmit = (e) => {
+      e.preventDefault();
+      const fd = new FormData(mf), ms = (store.d.misreadings ||= []);
+      ms.push({ id: `MR${ms.length + 1}`, ...Object.fromEntries(["basis", "basisText", "reaction", "date", "who", "changed", "reengage"].map((k) => [k, String(fd.get(k) || "").trim()])), at: new Date().toISOString() });
+      store.save(); rerender("#misread"); announce("読み違いと関わり直しを記録しました");
+    };
     const f = $("#evtForm");
     if (f) f.onsubmit = (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       store.d.events.push({
         id: `E${store.d.events.length + 1}`, date: fd.get("date"), change: fd.get("change"),
-        expression: fd.get("expression"), stopped: !!fd.get("stopped"), plan: "P1", at: new Date().toISOString(),
+        expression: fd.get("expression"), words: (fd.get("words") || "").trim(), hesitation: (fd.get("hesitation") || "").trim(),
+        stopped: !!fd.get("stopped"), plan: "P1", at: new Date().toISOString(),
       });
       store.save(); rerender("#evtForm button"); announce("日常で試したことを記録しました");
     };
@@ -1012,7 +1154,7 @@
       <h3>その後の様子と余韻を書き足す（${fmtDate(e.date)}・${esc(id)}）</h3>
       <p class="note">本人のその後の表現と、支援者自身の余韻を分けて書きます。支援者の余韻を、本人の感覚の証拠として扱いません。</p>
       <form class="evt" id="afterForm">
-        <label>その後、本人が表したこと・生活に見られたこと<textarea name="afterPerson" rows="3"></textarea></label>
+        <label>その後、本人が表したこと・生活に見られたこと（表情、身体の緊張、近づく・離れる、選んだこと、食事・睡眠の様子）<textarea name="afterPerson" rows="3"></textarea></label>
         <label>支援者自身に残ったこと（驚き・安心・戸惑い・違和感）<textarea name="afterSupporter" rows="3"></textarea></label>
         <button class="btn primary">保存する</button>
       </form>`);
