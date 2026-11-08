@@ -467,7 +467,7 @@
         ${store.d.plans.length ? `<h3>登録済みの試行計画</h3><ul class="plain-list">${store.d.plans.map((p) => `<li class="box"><b>${esc(p.id)}</b> ${esc(p.change)}（担当 ${esc(p.owner)}）</li>`).join("")}</ul>` : ""}`;
     } else {
       panel = `
-        <h2>⑦ おわりに</h2>
+        <h2>⑥ おわりに</h2>
         <p>会議を終えると、次の内容がダッシュボードに反映されます（FR-0.4.2）。</p>
         <ul>
           <li>加えた見方：${MT.statements.length}件</li>
