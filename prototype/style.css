@@ -676,3 +676,16 @@ article.stmt { display: grid; grid-template-columns: 12px 1fr; gap: 6px; padding
 .dash-a4 .story-strip .mini-viz { max-height: 150px; }
 .dash-a4 .story-strip .viz svg { max-height: 150px; width: 100%; height: auto; }
 @media print { .dash-a4 { zoom: 0.86; } .dash-a4 .story-strip .viz svg { max-height: 140px; } }
+
+/* v0.9: 身体と医療の経過・管理語・読み違い (F-15, FR-5.6, FR-8.10) */
+.lead-note { border-left: 4px solid var(--l-illness); background: var(--surface-2); padding: 8px 12px; border-radius: 4px; margin: 0 0 12px; }
+.health-card { margin-bottom: 10px; }
+.body-signs { margin: 4px 0; padding-left: 1.2em; }
+.health-kv { font-size: 14px; }
+.table-wrap { overflow-x: auto; }
+.field-warn { margin: 0; font-size: 14px; color: var(--ink); }
+.field-warn:not(:empty) { border-left: 4px solid var(--critical); padding: 4px 8px; background: var(--surface-2); }
+.field-warn:not(:empty)::before { content: "注意: "; font-weight: 700; }
+.guide-qs { padding-left: 1.2em; }
+.q-views { margin-top: 12px; }
+.q-views ul { padding-left: 1.2em; display: grid; gap: 4px; }
