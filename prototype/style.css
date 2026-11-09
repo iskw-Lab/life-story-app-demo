@@ -567,7 +567,7 @@ a.more { font-size: 13px; font-weight: 600; white-space: nowrap; min-height: 24p
 .v2-side details.legend > summary { cursor: pointer; min-height: 32px; }
 
 /* V1: heading and chart first; short legend; details on demand */
-.v1-page { display: grid; gap: 10px; max-width: 1600px; margin: 0 auto; }
+.v1-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; max-width: 1600px; margin: 0 auto; }
 .v1-head h1 { font-size: 20px; margin: 0 0 2px; }
 .v1-lead { margin: 0; font-size: 16px; }
 .v1-lead a { margin-left: 8px; white-space: nowrap; }
@@ -689,3 +689,42 @@ article.stmt { display: grid; grid-template-columns: 12px 1fr; gap: 6px; padding
 .guide-qs { padding-left: 1.2em; }
 .q-views { margin-top: 12px; }
 .q-views ul { padding-left: 1.2em; display: grid; gap: 4px; }
+
+/* V1 human corrections (FR-3.1.17–19) */
+.badge.human { border-color: var(--ink-2); color: var(--ink); font-weight: 600; }
+.edit-note { margin: 6px 0; padding: 6px 8px; border-left: 4px solid var(--ink-2); background: var(--surface-2); font-size: 14px; }
+.edit-note ul { margin: 4px 0 0; padding-left: 1.2em; }
+.edit-box { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+.edit-box > summary { cursor: pointer; font-weight: 600; min-height: 24px; }
+form.edit-form { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); align-items: end; margin-top: 8px; font-size: 14px; }
+form.edit-form .wide, form.edit-form fieldset { grid-column: 1 / -1; }
+form.edit-form fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 4px 8px; }
+form.edit-form label.inline { display: inline-flex; gap: 4px; align-items: center; margin-right: 14px; min-height: 24px; }
+form.edit-form label { min-width: 0; }
+form.edit-form select, form.edit-form input:not([type="checkbox"]) { min-height: 28px; width: 100%; min-width: 0; }
+.sum-sub { font-size: 16px; margin: 14px 0 4px; }
+.sum-title { margin: 6px 0 0; font-size: 16px; }
+.rel-edit-list { list-style: none; margin: 0; padding: 0; }
+.rel-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.v2-title { margin: 2px 0; }
+
+/* V1 on-chart editing (FR-3.1.20) */
+.v1-editbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.v1-editbar .note { flex: 1 1 280px; font-size: 14px; }
+.edit-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; padding: 4px 8px; border-left: 4px solid var(--ink-2); background: var(--surface-2); font-size: 14px; }
+svg.editing .node { cursor: grab; touch-action: none; }
+svg.editing .node.dragging { cursor: grabbing; opacity: 0.85; }
+.link-handle { cursor: crosshair; touch-action: none; }
+.link-draft { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 5 4; pointer-events: none; }
+.node.link-target circle:first-child { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 3 2; }
+
+/* where people corrected things (FR-3.1.21) */
+.edit-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 1.5; }
+.ghost { fill: none; stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.ghost-link { stroke: var(--ink-2); stroke-width: 1.2; stroke-dasharray: 2 4; }
+.edits-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.edits-table th, .edits-table td { border-top: 1px solid var(--grid); padding: 6px 8px; text-align: left; vertical-align: top; }
+.edits-table ul { margin: 0; padding-left: 1.1em; }
+.edits-acts { white-space: nowrap; }
+.edits-acts .btn { margin: 2px 0; }
+#editsList h2 { font-size: 17px; margin: 0 0 6px; }
