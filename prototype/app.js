@@ -532,14 +532,111 @@
         if (st.selected === s.id) svg("circle", { r: r + 6, class: "sel-ring" }, g);
       }
       if (compact) continue;
-      g.addEventListener("mousemove", (e) => showTip(nodeTip(n), e));
-      g.addEventListener("mouseleave", hideTip);
+      g.addEventListener("mousemove", (e) => { if (!root.__dragging) showTip(nodeTip(n), e); });
+      g.addEventListener("mouseleave", () => { if (!root.__dragging) hideTip(); });
       // choosing the selected node again clears the selection
       const pick = () => { st.selected = st.selected === n.id ? null : n.id; st.relEdit = null; opts.onSelect?.(n.id); };
-      g.addEventListener("click", (e) => { e.stopPropagation(); hideTip(); if (n.ev) return; pick(); });
+      g.addEventListener("click", (e) => { e.stopPropagation(); hideTip(); if (n.ev || root.__afterDrag) return; pick(); });
       g.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && n.s) { e.preventDefault(); pick(); } });
       g.addEventListener("focus", () => { svg("circle", { r: n.r + 6, class: "focus-ring" }, g); showTipAt(nodeTip(n), g); });
       g.addEventListener("blur", () => { g.querySelector(".focus-ring")?.remove(); hideTipNow(); });
+    }
+
+    // direct manipulation (FR-3.1.20): V1 only, while 「図の上で修正する」 is on.
+    // Drag sideways = date (month steps, day kept), drag across bands = primary layer,
+    // drag the ＋ handle of the selected node onto another node = new relation. Arrow keys do the same moves.
+    if (!compact && opts.editable && st.v1Edit) {
+      root.classList.add("editing");
+      const inv = (px) => dom[0] + ((px - left) / (W - left - right)) * (dom[1] - dom[0]);
+      const local = (e) => { const b = root.getBoundingClientRect(); return [(e.clientX - b.left) * (W / b.width), (e.clientY - b.top) * (H / b.height)]; };
+      const ymd = (y, m, day) => { const d = new Date(y, m, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; };
+      const clampDate = (d) => (d < "1981-01-01" ? "1981-01-01" : d > "2026-12-31" ? "2026-12-31" : d);
+      const dateAt = (s, px) => { const d = new Date(Math.min(Math.max(inv(px), dom[0]), dom[1])); return clampDate(ymd(d.getFullYear(), d.getMonth(), Math.min(+s.date.slice(8, 10), 28))); };
+      const shiftMonths = (s, k) => clampDate(ymd(+s.date.slice(0, 4), +s.date.slice(5, 7) - 1 + k, Math.min(+s.date.slice(8, 10), 28)));
+      const visLanes = LAYERS.filter((L) => st.layers[L.id]).map((L) => L.id);
+      const laneAt = (py) => visLanes.find((l) => py >= laneTop[l] && py < laneTop[l] + laneH[l]);
+      const endDrag = () => { root.__dragging = false; root.__afterDrag = true; setTimeout(() => (root.__afterDrag = false), 0); hideTipNow(); };
+      for (const n of nodes) {
+        if (!n.s) continue;
+        const g = gNodes.querySelector(`[data-node="${n.id}"]`);
+        g.setAttribute("aria-describedby", "editHint");
+        g.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return;
+          const [sx, sy] = local(e);
+          let axis = null, change = null;
+          try { g.setPointerCapture(e.pointerId); } catch (err) { /* synthetic or finished pointer */ }
+          const move = (ev) => {
+            const [px, py] = local(ev), dx = px - sx, dy = py - sy;
+            if (!axis) { if (Math.hypot(dx, dy) < 6) return; axis = Math.abs(dx) >= Math.abs(dy) ? "x" : "y"; root.__dragging = true; g.classList.add("dragging"); }
+            if (axis === "x") {
+              const nd = dateAt(n.s, n.cx + dx);
+              change = nd !== n.s.date ? { date: nd } : null;
+              g.setAttribute("transform", `translate(${x(t(nd))},${n.cy})`);
+              showTip(`<b>${n.id} の日付</b><br>${fmtDate(n.s.date)} → <b>${fmtDate(nd)}</b>（${yearOf(nd) - birthYear}歳ごろ）<br><span class="muted">離すと保存します</span>`, ev);
+            } else {
+              const lane = laneAt(py) || n.layer;
+              change = lane !== n.layer ? { primary: lane } : null;
+              g.setAttribute("transform", `translate(${n.cx},${Math.min(Math.max(py, top), H - 30)})`);
+              showTip(`<b>${n.id} の主レイヤ</b><br>${layerName[n.layer]} → <b>${layerName[lane]}</b><br><span class="muted">離すと保存します</span>`, ev);
+            }
+          };
+          const up = (ev) => {
+            g.removeEventListener("pointermove", move); g.removeEventListener("pointerup", up); g.removeEventListener("pointercancel", up);
+            if (!axis) return; // a plain click selects (click handler)
+            endDrag(); g.classList.remove("dragging");
+            if (ev.type === "pointerup" && change) opts.onMove?.(n.id, change);
+            else g.setAttribute("transform", `translate(${n.cx},${n.cy})`);
+          };
+          g.addEventListener("pointermove", move); g.addEventListener("pointerup", up); g.addEventListener("pointercancel", up);
+        });
+        g.addEventListener("keydown", (e) => {
+          if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+          e.preventDefault();
+          if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+            const nd = shiftMonths(n.s, (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 12 : 1));
+            if (nd === n.s.date) { announce("これ以上は動かせません"); return; }
+            opts.onMove?.(n.id, { date: nd });
+          } else {
+            const i = visLanes.indexOf(n.layer) + (e.key === "ArrowDown" ? 1 : -1);
+            if (i < 0 || i >= visLanes.length) { announce("これ以上は動かせません"); return; }
+            opts.onMove?.(n.id, { primary: visLanes[i] });
+          }
+        });
+      }
+      // ＋ handle on the selected node: drag onto another node to connect them
+      const sel = nodeById[st.selected];
+      if (sel?.s) {
+        const hx = sel.cx + sel.r + 18, hy = sel.cy;
+        const h = svg("g", { class: "link-handle", transform: `translate(${hx},${hy})` }, root);
+        svg("line", { x1: -(sel.r + 18) + sel.r + 6, x2: -10, y1: 0, y2: 0, stroke: "var(--ink-2)", "stroke-width": 1.5 }, h);
+        svg("circle", { r: 10, fill: "var(--surface)", stroke: "var(--ink-2)", "stroke-width": 2 }, h);
+        svg("path", { d: "M-5,0H5M0,-5V5", stroke: "var(--ink)", "stroke-width": 2 }, h);
+        h.addEventListener("mousemove", (e) => { if (!root.__dragging) showTip(`<b>関係を結ぶ</b><br>この＋を、結びたい出来事の上までドラッグして離します`, e); });
+        h.addEventListener("mouseleave", () => { if (!root.__dragging) hideTip(); });
+        h.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          try { h.setPointerCapture(e.pointerId); } catch (err) { /* synthetic or finished pointer */ }
+          root.__dragging = true;
+          const line = svg("path", { class: "link-draft", d: `M${sel.cx},${sel.cy}L${hx},${hy}` }, root);
+          let target = null;
+          const move = (ev) => {
+            const [px, py] = local(ev);
+            line.setAttribute("d", `M${sel.cx},${sel.cy}L${px},${py}`);
+            const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.("[data-node]");
+            const id = over && over.dataset.node !== sel.id && sceneById[over.dataset.node] ? over.dataset.node : null;
+            if (id !== target) { root.querySelector(".link-target")?.classList.remove("link-target"); target = id; if (id) over.classList.add("link-target"); }
+            showTip(target ? `<b>${sel.id} → ${target}</b> を結びます（離すと追加）` : "結びたい出来事の上で離します", ev);
+          };
+          const up = (ev) => {
+            h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up);
+            line.remove(); root.querySelector(".link-target")?.classList.remove("link-target"); endDrag();
+            if (ev.type === "pointerup" && target) opts.onLink?.(sel.id, target);
+            else announce("関係は追加しませんでした。結びたい出来事の上で離してください");
+          };
+          h.addEventListener("pointermove", move); h.addEventListener("pointerup", up); h.addEventListener("pointercancel", up);
+        });
+      }
     }
 
     // brush to zoom (FR-3.1.7)
@@ -547,7 +644,7 @@
       let start = null; let band = null;
       const pt = (e) => { const b = root.getBoundingClientRect(); return e.clientX - b.left; };
       root.addEventListener("mousedown", (e) => {
-        if (e.target.closest(".node, .rel-hit")) return;
+        if (e.target.closest(".node, .rel-hit, .link-handle")) return;
         start = pt(e); band = svg("rect", { x: start, y: top, width: 0, height: H - top - 30, fill: "var(--accent)", opacity: 0.12 }, root);
       });
       root.addEventListener("mousemove", (e) => { if (start === null) return; const cur = pt(e); band.setAttribute("x", Math.min(cur, start)); band.setAttribute("width", Math.abs(cur - start)); });
@@ -1254,6 +1351,13 @@
         <section class="card v1-chart" aria-labelledby="chartH">
           <h2 id="chartH" class="sr-only">全体概要の図</h2>
           ${shortLegendHtml()}
+          <div class="v1-editbar">
+            <button class="btn small" id="editMode" aria-pressed="${!!st.v1Edit}" aria-describedby="editHint">図の上で修正する</button>
+            <span class="note" id="editHint">${st.v1Edit
+              ? "出来事を左右にドラッグすると日付（月単位）、上下の帯へドラッグすると主レイヤが変わり、離すと保存します。選んだ出来事の「＋」を別の出来事へドラッグすると関係を結べます。線をクリックすると関係を修正できます。キーボードでは出来事を選んで ←→（Shift で1年）と ↑↓ で同じ修正ができます。"
+              : "オンにすると、図の上で出来事を動かしたり、出来事どうしを結んだりして修正できます。"}</span>
+          </div>
+          ${st.undo?.msg ? `<div class="edit-status" role="status"><span>${esc(st.undo.msg)}</span> <button class="btn small" id="undoEdit">元に戻す<span class="sr-only">（${esc(st.undo.msg)}）</span></button></div>` : ""}
           <div class="viz" id="v1"></div>
           <div class="v1-selbar" id="selbar" aria-live="polite">${selbarHtml()}</div>
           <div class="v1-controls">
@@ -1297,11 +1401,35 @@
         announce(`関係 ${r.id}（${r.from}→${r.to}）の修正欄を開きました`);
       },
       onZoom: () => renderV1(),
+      editable: true,
+      onMove: (id, change) => {
+        const s = sceneById[id];
+        const next = { date: s.date, layers: [...s.layers], primary: s.primary, themes: [...s.themes], title: s.title, ...change };
+        if (change.primary && !next.layers.includes(change.primary)) next.layers = LAYERS.map((l) => l.id).filter((l) => next.layers.includes(l) || l === change.primary);
+        const what = change.date ? `日付を ${fmtDate(s.date)} から ${fmtDate(change.date)} に` : `主レイヤを ${layerName[s.primary]} から ${layerName[change.primary]} に`;
+        st.undo = { kind: "scene", id, prev: store.d.sceneEdits[id], msg: `${id} の${what}しました` };
+        saveSceneEdit(s, next, "図の上で修正");
+        st.selected = id;
+        afterEdit(`#v1 [data-node="${id}"]`, `${id} の${what}しました。元に戻すボタンで取り消せます`);
+      },
+      onLink: (from, to) => {
+        const id = addRelation({ type: "participant", from, to, desc: "", direction: "", system: "" }, "図の上で結んだ");
+        st.undo = { kind: "rel-add", id, msg: `${from} と ${to} を結びました（${id}）` };
+        st.relTypes.participant = true; st.selected = from; st.relEdit = id;
+        afterEdit(`#rel-${id} [name=desc]`, `${from} と ${to} を「参加者が結んだ見方」の関係で結びました。説明を書いて保存してください`);
+      },
     });
     const bindSelbar = () => { const a = $("#toSummary"); if (a) a.onclick = (e) => { e.preventDefault(); const box = $("#summary"); box.scrollIntoView({ block: "start", behavior: scrollBehavior() }); box.focus({ preventScroll: true }); }; };
     draw();
     renderSummary(st.selected);
     bindSelbar();
+    $("#editMode").onclick = () => { st.v1Edit = !st.v1Edit; renderV1(); $("#editMode").focus(); announce(st.v1Edit ? "図の上で修正できるようにしました" : "図の上での修正を終えました"); };
+    if ($("#undoEdit")) $("#undoEdit").onclick = () => {
+      const u = st.undo; st.undo = null;
+      if (u.kind === "scene") { if (u.prev) store.d.sceneEdits[u.id] = u.prev; else delete store.d.sceneEdits[u.id]; }
+      else if (u.kind === "rel-add") { store.d.userRels = store.d.userRels.filter((r) => r.id !== u.id); if (st.relEdit === u.id) st.relEdit = null; }
+      afterEdit(u.kind === "scene" ? `#v1 [data-node="${u.id}"]` : "#editMode", `「${u.msg}」を取り消しました`);
+    };
     $("#toPeriods").onclick = (e) => { e.preventDefault(); const p = $("#periods"); p.scrollIntoView({ block: "start", behavior: scrollBehavior() }); p.querySelector("a")?.focus({ preventScroll: true }); };
     app.querySelectorAll("[data-layer]").forEach((c) => (c.onchange = () => { st.layers[c.dataset.layer] = c.checked; draw(); }));
     app.querySelectorAll("[data-rel-type]").forEach((c) => (c.onchange = () => { st.relTypes[c.dataset.relType] = c.checked; draw(); }));
@@ -1418,6 +1546,22 @@
     bindEditForms(box, s);
   }
 
+  // shared by the forms and the on-chart edits; returns the number of fields that differ from the seed
+  const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  function saveSceneEdit(s, next, reason) {
+    const v = {};
+    for (const k of Object.keys(next)) if (Array.isArray(next[k]) ? !sameList(next[k], s.orig[k]) : next[k] !== s.orig[k]) v[k] = next[k];
+    if (Object.keys(v).length) store.d.sceneEdits[s.id] = { v, by: role(), at: new Date().toISOString(), reason };
+    else delete store.d.sceneEdits[s.id];
+    return Object.keys(v).length;
+  }
+  function addRelation(next, reason) {
+    const n = Math.max(0, ...store.d.userRels.map((u) => +u.id.slice(1))) + 1;
+    const id = `H${String(n).padStart(3, "0")}`;
+    store.d.userRels.push({ id, ...next, method: "human", status: "採用", by: role(), confirm: "本人未確認", at: new Date().toISOString(), reason });
+    return id;
+  }
+
   // save → re-apply overlays → redraw V1 (V2 reads the same objects)
   function afterEdit(focusSel, msg) {
     applyEdits(); store.save();
@@ -1430,7 +1574,6 @@
   function bindEditForms(box, s) {
     const id = s.id;
     box.querySelectorAll("details[data-edit]").forEach((d) => (d.ontoggle = () => { if (d.open) st.editOpen = d.dataset.edit; else if (st.editOpen === d.dataset.edit) st.editOpen = null; }));
-    const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
     $("#sceneForm").onsubmit = (e) => {
       e.preventDefault();
       const fd = new FormData(e.target), err = $("#sceneErr");
@@ -1440,14 +1583,12 @@
         : !layers.length ? "レイヤを1つ以上選んでください。"
         : !layers.includes(primary) ? "主レイヤは、選んだレイヤの中から選んでください。" : "";
       if (bad) { err.textContent = bad; return; }
-      const next = { date, layers, primary, themes, title }, v = {};
-      for (const k of Object.keys(next)) if (Array.isArray(next[k]) ? !sameList(next[k], s.orig[k]) : next[k] !== s.orig[k]) v[k] = next[k];
-      if (Object.keys(v).length) store.d.sceneEdits[id] = { v, by: role(), at: new Date().toISOString(), reason: String(fd.get("reason")).trim() };
-      else delete store.d.sceneEdits[id];
+      st.undo = { kind: "scene", id, prev: store.d.sceneEdits[id], msg: `${id} を修正しました` };
+      const changed = saveSceneEdit(s, { date, layers, primary, themes, title }, String(fd.get("reason")).trim());
       st.layers[primary] = true;
       if (st.domain && (t(date) < st.domain[0] || t(date) > st.domain[1])) st.domain = null;
       st.editOpen = null;
-      afterEdit(`#v1 [data-node="${id}"]`, Object.keys(v).length ? `${id} の修正を保存しました` : `${id} は元の値のままです`);
+      afterEdit(`#v1 [data-node="${id}"]`, changed ? `${id} の修正を保存しました` : `${id} は元の値のままです`);
     };
     const rv = $("#sceneRevert");
     if (rv) rv.onclick = () => { delete store.d.sceneEdits[id]; st.editOpen = null; afterEdit(`#v1 [data-node="${id}"]`, `${id} を元の値に戻しました`); };
@@ -1492,9 +1633,8 @@
       const at = new Date().toISOString();
       let newId = rid;
       if (!rid) {
-        const n = Math.max(0, ...store.d.userRels.map((u) => +u.id.slice(1))) + 1;
-        newId = `H${String(n).padStart(3, "0")}`;
-        store.d.userRels.push({ id: newId, ...next, method: "human", status: "採用", by: role(), confirm: "本人未確認", at, reason });
+        newId = addRelation(next, reason);
+        st.undo = { kind: "rel-add", id: newId, msg: `関係 ${newId} を追加しました` };
         st.editOpen = null;
       } else {
         const r = S.relations.find((x) => x.id === rid);

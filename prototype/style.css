@@ -707,3 +707,13 @@ form.edit-form select, form.edit-form input:not([type="checkbox"]) { min-height:
 .rel-edit-list { list-style: none; margin: 0; padding: 0; }
 .rel-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .v2-title { margin: 2px 0; }
+
+/* V1 on-chart editing (FR-3.1.20) */
+.v1-editbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.v1-editbar .note { flex: 1 1 280px; font-size: 14px; }
+.edit-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; padding: 4px 8px; border-left: 4px solid var(--ink-2); background: var(--surface-2); font-size: 14px; }
+svg.editing .node { cursor: grab; touch-action: none; }
+svg.editing .node.dragging { cursor: grabbing; opacity: 0.85; }
+.link-handle { cursor: crosshair; touch-action: none; }
+.link-draft { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 5 4; pointer-events: none; }
+.node.link-target circle:first-child { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 3 2; }
