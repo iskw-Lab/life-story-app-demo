@@ -177,6 +177,7 @@
     return `<div class="edit-note"><span class="badge human">人が修正</span> <span class="note">${esc(e.by)}・${fmtDate(e.at.slice(0, 10))}${e.reason ? `・理由: ${esc(e.reason)}` : ""}</span>
       <ul>${Object.keys(e.v).map((k) => `<li>${FIELD_NAME[k]}: 元の値「${esc(showVal(k, obj.orig[k]))}」→ 修正後「${esc(showVal(k, obj[k]))}」</li>`).join("")}</ul></div>`;
   }
+  const editSummary = (obj) => Object.keys(obj.edit.v).map((k) => `${FIELD_NAME[k]} ${showVal(k, obj.orig[k])}→${showVal(k, obj[k])}`).join("、");
   const humanBadge = (obj) => (obj.user ? '<span class="badge human">人が追加</span>' : obj.edit ? '<span class="badge human">人が修正</span>' : "");
 
   // practice events recorded in this browser (F-8 / FR-3.1.12)
@@ -491,12 +492,28 @@
         } else if (r.type === "institutional") {
           svg("path", { d, stroke: "var(--ink-2)", "stroke-width": 3.5, "stroke-dasharray": dash }, g);
         } else {
-          svg("path", { d, stroke: r.type === "theme" ? "var(--l-life)" : "var(--muted)", "stroke-width": 1.5, "stroke-dasharray": dash }, g);
+          const human = r.user || r.edit;
+          svg("path", { d, stroke: human ? "var(--ink)" : r.type === "theme" ? "var(--l-life)" : "var(--muted)", "stroke-width": human ? 2.5 : 1.5, "stroke-dasharray": dash }, g);
         }
         const hit = svg("path", { d, stroke: "transparent", "stroke-width": 12, class: "rel-hit", style: "cursor:pointer" }, g);
         hit.addEventListener("mousemove", (e) => showTip(`<b>${REL[r.type].name}</b>${r.direction ? `（${DIRECTION[r.direction]}：${esc(r.system)}）` : ""}${r.user ? "（人が追加）" : r.edit ? "（人が修正）" : ""}<br>${esc(r.desc)}<br>${r.from} → ${r.to}<br>見方: ${esc(r.by)} ／ ${esc(r.confirm)} ／ 状態: ${esc(stt)}<br><span class="muted">関係の線は因果を意味しません。クリックすると修正できます</span>`, e));
         hit.addEventListener("mouseleave", hideTip);
         hit.addEventListener("click", (e) => { e.stopPropagation(); hideTip(); opts.onEdge?.(r); });
+      }
+    }
+
+    // where moved events used to be (FR-3.1.21): dotted outline + dotted link to the new position
+    if (!compact) {
+      const gGhost = svg("g", { class: "ghosts" }, root);
+      for (const n of nodes) {
+        const s = n.s;
+        if (!s?.edit || !(s.edit.v.date || s.edit.v.primary)) continue;
+        if (!st.layers[s.orig.primary] || !inDom(t(s.orig.date))) continue;
+        const gx = x(t(s.orig.date)), gy = laneTop[s.orig.primary] + lanePad + rowH / 2 + 4;
+        svg("line", { x1: gx, y1: gy, x2: n.cx, y2: n.cy, class: "ghost-link" }, gGhost);
+        const c = svg("circle", { cx: gx, cy: gy, r: Math.max(6, n.r), class: "ghost" }, gGhost);
+        c.addEventListener("mousemove", (e) => showTip(`<b>${s.id} の元の位置</b><br>${fmtDate(s.orig.date)}・${layerName[s.orig.primary]}<br><span class="muted">人が ${fmtDate(s.date)}・${layerName[s.primary]} に修正</span>`, e));
+        c.addEventListener("mouseleave", hideTip);
       }
     }
 
@@ -529,6 +546,7 @@
         if (importanceLevel(s.id) === 4) svg("circle", { r: r + 3.5, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5 }, g);
         if (s.personVoice && !compact) svg("circle", { r: 2.2, fill: s.kind === "family" ? col : "var(--surface)" }, g);
         if (s.restraint) svg("rect", { x: -3, y: -r - 9, width: 6, height: 6, transform: `rotate(45 0 ${-r - 6})`, fill: "var(--ink)" }, g);
+        if (s.edit && !compact) svg("circle", { cx: r * 0.8 + 1, cy: -r * 0.8 - 1, r: 3.5, class: "edit-dot" }, g);
         if (st.selected === s.id) svg("circle", { r: r + 6, class: "sel-ring" }, g);
       }
       if (compact) continue;
@@ -667,7 +685,7 @@
     if (n.ev) return `実践の出来事 ${n.ev.id} ${fmtDate(n.ev.date)}`;
     const s = n.s, ms = marksFor(s.id);
     return `${fmtDate(s.date)} ${yearOf(s.date) - birthYear}歳ごろ ${s.id}。${s.layers.map((l) => layerName[l]).join("・")}レイヤ。${KIND_LABEL[s.kind]}。` +
-      `${clip(s.text, 40)}。大切さの印 ${ms.length ? ms.map((m) => m.role).join("・") : "未評価"}${s.restraint ? "。権利制限的対応を含む" : ""}${s.edit ? "。人が修正" : ""}`;
+      `${clip(s.text, 40)}。大切さの印 ${ms.length ? ms.map((m) => m.role).join("・") : "未評価"}${s.restraint ? "。権利制限的対応を含む" : ""}${s.edit ? `。人が修正: ${editSummary(s)}` : ""}`;
   }
   function nodeTip(n) {
     if (n.ev) {
@@ -681,7 +699,7 @@
       ${esc(s.heading.replace(/^\S+\s+\S+\s+/, ""))} ／ ${esc(KIND_LABEL[s.kind])}<br>
       ${esc(clip(s.text, 90))}<br>
       レイヤ: ${s.layers.map((l) => layerName[l] + (l === s.primary ? "（主）" : "")).join("・")} <span class="muted">候補</span><br>
-      大切さの印: ${esc(who)}${s.personVoice ? "<br>● 本人の発話候補あり" : ""}${s.restraint ? "<br>◆ 権利制限的対応を含む" : ""}${s.edit ? "<br><b>人が修正した項目</b>" : ""}`;
+      大切さの印: ${esc(who)}${s.personVoice ? "<br>● 本人の発話候補あり" : ""}${s.restraint ? "<br>◆ 権利制限的対応を含む" : ""}${s.edit ? `<br><b>人が修正</b>: ${esc(editSummary(s))}` : ""}`;
   }
 
   function legendHtml() {
@@ -718,6 +736,10 @@
       <div class="li"><svg width="40" height="12" aria-hidden="true"><path d="M2,6 L38,6" stroke="var(--ink-2)" stroke-width="5"/><path d="M2,6 L38,6" stroke="var(--surface)" stroke-width="2"/></svg>制度による対応：制約した</div>
       <div class="li">${line('stroke="var(--ink-2)" stroke-width="3.5"')}制度による対応：可能にした</div>
       <div class="li">${line('stroke="var(--l-life)" stroke-width="1.5" stroke-dasharray="4 3"')}同じ人・もの・テーマ</div>
+      <h4>人による修正</h4>
+      <div class="li"><svg width="16" height="16" aria-hidden="true"><circle cx="7" cy="9" r="5" fill="var(--muted)"/><circle cx="12" cy="4" r="3.5" class="edit-dot"/></svg>右上の黒丸：人が修正した出来事</div>
+      <div class="li"><svg width="40" height="16" aria-hidden="true"><line x1="8" y1="8" x2="32" y2="8" class="ghost-link"/><circle cx="8" cy="8" r="5" class="ghost"/><circle cx="32" cy="8" r="5" fill="var(--muted)"/></svg>点線の○：日付や帯を動かす前の位置</div>
+      <div class="li">${line('stroke="var(--ink)" stroke-width="2.5"')}人が追加・修正した関係</div>
     </div>`;
   }
 
@@ -1311,6 +1333,8 @@
       ${Object.entries(KIND_LABEL).map(([k, v]) => `<span><span aria-hidden="true">${sh(k)}</span> ${v.replace("の記録", "")}</span>`).join("")}
       <span class="sep" aria-hidden="true">｜</span>
       <span>大きい＝人が付けた大切さの印</span><span><span aria-hidden="true">◆</span> 権利制限的対応</span><span>点線＝関係の候補（因果ではない）</span>
+      <span class="sep" aria-hidden="true">｜</span>
+      <span><svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4" class="edit-dot"/></svg> 右上の黒丸＝人が修正</span><span><svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" class="ghost"/></svg> 点線の○＝修正前の位置</span><span>濃い線＝人が追加・修正した関係</span>
     </div>`;
   }
   function selbarHtml() {
@@ -1353,6 +1377,7 @@
           ${shortLegendHtml()}
           <div class="v1-editbar">
             <button class="btn small" id="editMode" aria-pressed="${!!st.v1Edit}" aria-describedby="editHint">図の上で修正する</button>
+            <a href="#editsList" id="toEdits">人が修正したところ ${editsList().length}件を一覧で見る ↓</a>
             <span class="note" id="editHint">${st.v1Edit
               ? "出来事を左右にドラッグすると日付（月単位）、上下の帯へドラッグすると主レイヤが変わり、離すと保存します。選んだ出来事の「＋」を別の出来事へドラッグすると関係を結べます。線をクリックすると関係を修正できます。キーボードでは出来事を選んで ←→（Shift で1年）と ↑↓ で同じ修正ができます。"
               : "オンにすると、図の上で出来事を動かしたり、出来事どうしを結んだりして修正できます。"}</span>
@@ -1385,6 +1410,7 @@
           </div>
         </section>
         <section class="card summary" id="summary" tabindex="-1" aria-labelledby="sumH"></section>
+        ${editsListHtml()}
         ${periodEntryHtml()}
         <details class="card v1-legend-more">
           <summary><b>詳しい読み方</b>（色・形・大きさ・印・関係線の意味）</summary>
@@ -1423,6 +1449,26 @@
     draw();
     renderSummary(st.selected);
     bindSelbar();
+    $("#toEdits").onclick = (e) => { e.preventDefault(); const p = $("#editsList"); p.scrollIntoView({ block: "start", behavior: scrollBehavior() }); p.focus({ preventScroll: true }); };
+    app.querySelectorAll("[data-showedit]").forEach((b) => (b.onclick = () => {
+      const s = sceneById[b.dataset.showedit];
+      st.selected = s.id; st.layers[s.primary] = true;
+      if (st.domain && (t(s.date) < st.domain[0] || t(s.date) > st.domain[1])) st.domain = null;
+      renderV1();
+      const g = $(`#v1 [data-node="${s.id}"]`);
+      g?.scrollIntoView({ block: "center", inline: "center", behavior: scrollBehavior() }); g?.focus({ preventScroll: true });
+      announce(`${s.id} を図で選びました`);
+    }));
+    app.querySelectorAll("[data-undoedit]").forEach((b) => (b.onclick = () => {
+      const [k, id] = b.dataset.undoedit.split(":");
+      if (k === "u" && !b.dataset.armed) { b.dataset.armed = "1"; b.firstChild.textContent = "もう一度押すと削除します"; announce("もう一度押すと、この関係を削除します"); return; }
+      if (k === "s") delete store.d.sceneEdits[id];
+      else if (k === "r") delete store.d.relEdits[id];
+      else if (k === "st") delete store.d.relStatus[id];
+      else { store.d.userRels = store.d.userRels.filter((r) => r.id !== id); if (st.relEdit === id) st.relEdit = null; }
+      st.undo = null;
+      afterEdit("#editsList", `${k === "u" ? `関係 ${id} を削除しました` : `${id} を修正前に戻しました`}`);
+    }));
     $("#editMode").onclick = () => { st.v1Edit = !st.v1Edit; renderV1(); $("#editMode").focus(); announce(st.v1Edit ? "図の上で修正できるようにしました" : "図の上での修正を終えました"); };
     if ($("#undoEdit")) $("#undoEdit").onclick = () => {
       const u = st.undo; st.undo = null;
@@ -1502,6 +1548,37 @@
         <button class="btn small" data-redit="${r.id}" aria-expanded="${st.relEdit === r.id}">関係を修正する<span class="sr-only">（${r.id}）</span></button></div>
       ${st.relEdit === r.id ? relForm(r) : ""}
     </li>`;
+  }
+
+  // every human correction in one place (FR-3.1.21), newest first
+  function editsList() {
+    const rows = [];
+    for (const s of scenes) if (s.edit) rows.push({ sceneId: s.id, target: `出来事 ${s.id} ${fmtDate(s.date)}${s.title ? `「${s.title}」` : ""}`, changes: Object.keys(s.edit.v).map((k) => `${FIELD_NAME[k]}: ${showVal(k, s.orig[k])} → ${showVal(k, s[k])}`), e: s.edit, undo: `s:${s.id}` });
+    for (const r of S.relations) {
+      const target = `関係 ${r.id}（${r.from} → ${r.to}・${REL[r.type].name}）`;
+      if (r.user) rows.push({ sceneId: r.from, target, changes: [`人が追加: ${r.desc || "説明なし"}`], e: { by: r.by, at: r.at, reason: r.reason }, undo: `u:${r.id}` });
+      else if (r.edit) rows.push({ sceneId: r.from, target, changes: Object.keys(r.edit.v).map((k) => `${FIELD_NAME[k]}: ${showVal(k, r.orig[k])} → ${showVal(k, r[k])}`), e: r.edit, undo: `r:${r.id}` });
+      if (!r.user && store.d.relStatus[r.id] && store.d.relStatus[r.id] !== r.status) rows.push({ sceneId: r.from, target, changes: [`状態: ${r.status} → ${store.d.relStatus[r.id]}`], e: null, undo: `st:${r.id}` });
+    }
+    return rows.sort((a, b) => (b.e?.at || "").localeCompare(a.e?.at || ""));
+  }
+  function editsListHtml() {
+    const rows = editsList();
+    const lbl = (x) => `<span class="sr-only">（${esc(x.target)}）</span>`;
+    return `<section class="card v1-edits" id="editsList" tabindex="-1" aria-labelledby="edH">
+      <h2 id="edH">人が修正したところ（${rows.length}件）</h2>
+      ${rows.length ? `<p class="note">図では、修正した出来事の右上に黒丸が付きます。日付や帯を動かした出来事は、修正前の位置を点線の○で示します。人が追加・修正した関係の線は濃く太く描きます。</p>
+      <div class="table-wrap"><table class="edits-table">
+        <thead><tr><th scope="col">対象</th><th scope="col">修正の内容（修正前 → 修正後）</th><th scope="col">だれ・いつ・理由</th><th scope="col">操作</th></tr></thead>
+        <tbody>${rows.map((x) => `<tr>
+          <td>${esc(x.target)}</td>
+          <td><ul>${x.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></td>
+          <td>${x.e ? `${esc(x.e.by)}・${fmtDate((x.e.at || "").slice(0, 10))}${x.e.reason ? `<br>${esc(x.e.reason)}` : ""}` : "—"}</td>
+          <td class="edits-acts"><button class="btn small" data-showedit="${x.sceneId}">図で見る${lbl(x)}</button>
+            <a class="btn small" href="#/p/${PID}/v2?focus=${x.sceneId}">V2 で見る${lbl(x)}</a>
+            <button class="btn small" data-undoedit="${x.undo}">${x.undo.startsWith("u:") ? "削除する" : "元に戻す"}${lbl(x)}</button></td></tr>`).join("")}</tbody>
+      </table></div>` : `<p class="empty">まだ修正はありません。要約欄の修正欄か、「図の上で修正する」で修正できます。</p>`}
+    </section>`;
   }
 
   function renderSummary(id) {

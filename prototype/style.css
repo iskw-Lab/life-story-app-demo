@@ -717,3 +717,14 @@ svg.editing .node.dragging { cursor: grabbing; opacity: 0.85; }
 .link-handle { cursor: crosshair; touch-action: none; }
 .link-draft { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 5 4; pointer-events: none; }
 .node.link-target circle:first-child { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 3 2; }
+
+/* where people corrected things (FR-3.1.21) */
+.edit-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 1.5; }
+.ghost { fill: none; stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.ghost-link { stroke: var(--ink-2); stroke-width: 1.2; stroke-dasharray: 2 4; }
+.edits-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.edits-table th, .edits-table td { border-top: 1px solid var(--grid); padding: 6px 8px; text-align: left; vertical-align: top; }
+.edits-table ul { margin: 0; padding-left: 1.1em; }
+.edits-acts { white-space: nowrap; }
+.edits-acts .btn { margin: 2px 0; }
+#editsList h2 { font-size: 17px; margin: 0 0 6px; }
